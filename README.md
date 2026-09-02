@@ -20,14 +20,26 @@ go build -o change_lang.exe .
 .\change_lang.exe
 ```
 
-Without a console window (for autostart), logging to a file:
+Without a console window (for autostart); errors are logged to
+`%LOCALAPPDATA%\change_lang\log.txt` (add `-log` for the full log):
 
 ```powershell
 go build -ldflags "-H=windowsgui" -o change_lang_bg.exe .
-.\change_lang_bg.exe -log "$env:LOCALAPPDATA\change_lang\log.txt"
+.\change_lang_bg.exe
 ```
 
-Autostart: `Win+R` → `shell:startup` → put a shortcut to `change_lang_bg.exe` there.
+## Tray and autostart
+
+The app lives in the notification area (the blue "Aa" icon). Click it for the menu:
+
+- **Start with Windows** — checked when the app starts at login. On the very first run
+  autostart is turned on automatically; uncheck it to turn it off, and it stays off.
+  The entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\change_lang`) starts
+  the same exe with the same flags it is running with now — so enable it from
+  `change_lang_bg.exe`, otherwise a console window opens at login.
+- **Exit**.
+
+Only one copy runs at a time: a second start just shows a message and exits.
 
 ## Flags
 
@@ -36,7 +48,7 @@ Autostart: `Win+R` → `shell:startup` → put a shortcut to `change_lang_bg.exe
 | `-default`  | `system`                             | layout for new fields: `system` (from Windows settings), `keep` (leave as is) or a language (`en-US`, `ja`) |
 | `-db`       | `%LOCALAPPDATA%\change_lang\layouts.json` | where the memory is stored |
 | `-interval` | `100ms`                              | how often to check the current layout |
-| `-log`      | —                                    | also write the log to a file |
+| `-log`      | `%LOCALAPPDATA%\change_lang\log.txt` | log file. Without `-log` only errors (`ERROR …`) are written to the default file; with `-log` everything is: `-log` alone means the default file, `-log path` / `-log=path` another file. `-log=off` disables the file. `%VAR%` and `$env:VAR` are expanded, so the same command works from cmd, PowerShell and shortcuts. Diagnostic modes (`-watch`, `-probe`) write to a file only when `-log` is given explicitly |
 | `-chromium` | `true`                               | enable accessibility in Chrome/Edge/VS Code etc. (`-chromium=false` disables it, but then fields inside pages can't be told apart) |
 | `-v`        | —                                    | verbose log: every focus change with role and key |
 | `-list`     | —                                    | list installed layouts and exit |

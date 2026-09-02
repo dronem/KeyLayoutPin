@@ -57,7 +57,8 @@ func (m fakeMemory) Forget(k string) error     { delete(m, k); return nil }
 func setup(def HKL) (*fakeSystem, fakeMemory, *Engine) {
 	sys := &fakeSystem{layout: en, now: time.Unix(100, 0), fg: 1}
 	mem := fakeMemory{}
-	e := NewEngine(sys, mem, func() HKL { return def }, func(string, ...any) {})
+	nop := func(string, ...any) {}
+	e := NewEngine(sys, mem, func() HKL { return def }, nop, nop)
 	return sys, mem, e
 }
 

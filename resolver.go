@@ -43,7 +43,7 @@ var (
 	results   []resolved
 )
 
-func newResolver(mainThread uint32) *resolver {
+func newResolver(window uintptr) *resolver {
 	r := &resolver{reqs: make(chan resolveReq, 1)}
 	go func() {
 		runtime.LockOSThread()
@@ -54,7 +54,7 @@ func newResolver(mainThread uint32) *resolver {
 			resultsMu.Lock()
 			results = append(results, resolved{gen: req.gen, field: f, ok: ok})
 			resultsMu.Unlock()
-			procPostThreadMessageW.Call(uintptr(mainThread), wmFieldResolved, 0, 0)
+			procPostMessageW.Call(window, wmFieldResolved, 0, 0)
 		}
 	}()
 	return r
@@ -70,16 +70,41 @@ func takeResults() []resolved {
 
 // asyncWriter writes the log in the background. Console writes block while
 // text is selected in the console (QuickEdit) — that must not stall the app.
-type asyncWriter struct{ ch chan []byte }
+type asyncWriter struct {
+	ch   chan []byte
+	done chan struct{}
+}
 
 func newAsyncWriter(w io.Writer) *asyncWriter {
-	a := &asyncWriter{ch: make(chan []byte, 256)}
+	a := &asyncWriter{ch: make(chan []byte, 256), done: make(chan struct{})}
 	go func() {
 		for b := range a.ch {
 			w.Write(b)
 		}
+		close(a.done)
 	}()
 	return a
+}
+
+// Close flushes the queued lines; the writer must not be used afterwards.
+func (a *asyncWriter) Close() {
+	close(a.ch)
+	select {
+	case <-a.done:
+	case <-time.After(time.Second):
+	}
+}
+
+// teeWriter writes to every destination regardless of errors. Unlike
+// io.MultiWriter it doesn't stop at the first failure: a GUI build has no
+// valid stderr, and that must not prevent writing the log file.
+type teeWriter []io.Writer
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	for _, w := range t {
+		w.Write(p)
+	}
+	return len(p), nil
 }
 
 func (a *asyncWriter) Write(p []byte) (int, error) {

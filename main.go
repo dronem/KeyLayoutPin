@@ -10,7 +10,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -57,6 +56,7 @@ type tracker struct {
 	engine   *Engine
 	verbose  bool
 	threadID uint32
+	window   uintptr // tray window: all of the app's messages go there
 
 	// latest focus event from the hook, not yet handed to the resolver
 	ev       focusEvent
@@ -82,9 +82,21 @@ func winEventProc(hook, event, hwnd, idObject, idChild, idThread, eventTime uint
 	t.evNew = true
 	if !t.evQueued {
 		t.evQueued = true
-		procPostThreadMessageW.Call(uintptr(t.threadID), wmFocusChanged, 0, 0)
+		procPostMessageW.Call(t.window, wmFocusChanged, 0, 0)
 	}
 	return 0
+}
+
+// handleMessage receives the app's own messages via the tray window.
+func (t *tracker) handleMessage(msg uint32, _, _ uintptr) {
+	switch msg {
+	case wmFocusChanged:
+		t.dispatch()
+	case wmFieldResolved:
+		t.handleResolved()
+	case wmTimer:
+		t.tick()
+	}
 }
 
 // dispatch hands the latest event to the resolver if it is idle.
@@ -130,9 +142,9 @@ func (t *tracker) handleResolved() {
 func (t *tracker) tick() {
 	if t.busy && time.Since(t.busySince) > resolveTimeout {
 		_, pid := windowThreadProcess(t.ev.hwnd)
-		log.Printf("app %s is not responding — skipping", processName(pid))
+		errorf("app %s is not responding — skipping", processName(pid))
 		close(t.res.reqs) // the hung thread exits when (if) it returns
-		t.res = newResolver(t.threadID)
+		t.res = newResolver(t.window)
 		t.busy = false
 		t.evNew = true // retry the latest event on the new thread
 		t.dispatch()
@@ -303,6 +315,22 @@ func layoutByLocale(name string) HKL {
 	return found
 }
 
+// defaultLogPath is where the log goes unless -log says otherwise.
+func defaultLogPath() string {
+	return filepath.Join(localDataDir(), "log.txt")
+}
+
+// flagSet reports whether a flag was given on the command line.
+func flagSet(name string) bool {
+	set := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
+}
+
 // maxLogSize keeps the log from growing forever and piling up history.
 const maxLogSize = 1 << 20
 
@@ -333,7 +361,6 @@ func main() {
 		dbPath   = flag.String("db", defaultStorePath(), "file with remembered layouts")
 		defMode  = flag.String("default", "system", "layout for new fields: system (from Windows settings), keep (leave as is) or a language, e.g. en-US")
 		interval = flag.Duration("interval", 100*time.Millisecond, "how often to check the current layout")
-		logPath  = flag.String("log", "", "write the log to a file, e.g. %LOCALAPPDATA%/change_lang/log.txt (up to 1 MB, then log.old.txt)")
 		verbose  = flag.Bool("v", false, "verbose log: field labels and window titles (personal data!)")
 		chromium = flag.Bool("chromium", true, "enable accessibility in Chrome/Edge/VS Code etc. to tell apart fields inside pages")
 		list     = flag.Bool("list", false, "list installed layouts and exit")
@@ -341,21 +368,46 @@ func main() {
 		watchFor = flag.Duration("watch", 0, "diagnostics: log focus events and layout changes without switching anything (e.g. 3m)")
 		probeFor = flag.Duration("probe", 0, "diagnostics: print what has focus for the given duration (e.g. 30s)")
 	)
-	flag.Parse()
+	logOpt := &logFlag{path: defaultLogPath()}
+	flag.Var(logOpt, "log", "full log to a file (up to 1 MB, then log.old.txt); -log alone means the default file. Without -log only errors go to the default file; -log=off disables the file")
+	parseFlags(logOpt)
+	// Diagnostic modes print field labels and window titles — they go to
+	// a file only if -log was given explicitly, never to the default log.
+	diagnostic := *watchFor > 0 || *probeFor > 0 || *list || *reset
+	if logOpt.path != "off" {
+		resolvePathFlag("log")
+	}
+	resolvePathFlag("db")
 	log.SetFlags(log.Ltime)
-
 	wakeChromiumApps = *chromium
-	if *logPath != "" {
-		rotateLog(*logPath)
-		f, err := os.OpenFile(*logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+
+	// The file gets errors always (unless -log=off) and everything else
+	// only when -log was given explicitly.
+	logFile := logOpt.path
+	if logFile == "off" || (diagnostic && !flagSet("log")) {
+		logFile = ""
+	}
+	fullLog := flagSet("log") && logFile != ""
+
+	infoOut, errOut := teeWriter{os.Stderr}, teeWriter{os.Stderr}
+	if logFile != "" {
+		os.MkdirAll(filepath.Dir(logFile), 0o700)
+		rotateLog(logFile)
+		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
-			log.Fatal(err)
+			fatalf("cannot open log: %v", err)
 		}
 		defer f.Close()
-		log.SetOutput(newAsyncWriter(io.MultiWriter(os.Stderr, f)))
-	} else {
-		log.SetOutput(newAsyncWriter(os.Stderr))
+		errOut = append(errOut, f)
+		if fullLog {
+			infoOut = append(infoOut, f)
+		}
 	}
+	infoW, errW := newAsyncWriter(infoOut), newAsyncWriter(errOut)
+	defer infoW.Close()
+	defer errW.Close()
+	log.SetOutput(infoW)
+	errLog.SetOutput(errW)
 
 	if *watchFor > 0 {
 		runtime.LockOSThread()
@@ -373,7 +425,7 @@ func main() {
 	}
 	if *reset {
 		if err := os.Remove(*dbPath); err != nil && !os.IsNotExist(err) {
-			log.Fatal(err)
+			fatalf("%v", err)
 		}
 		fmt.Println("Memory cleared:", *dbPath)
 		return
@@ -386,14 +438,14 @@ func main() {
 		fallback = defaultInputLayout
 	default:
 		if layoutByLocale(m) == 0 {
-			log.Fatalf("layout %q is not installed (see -list)", m)
+			fatalf("layout %q is not installed (see -list)", m)
 		}
 		fallback = func() HKL { return layoutByLocale(m) }
 	}
 
 	store, err := loadStore(*dbPath)
 	if err != nil {
-		log.Fatalf("cannot read %s: %v", *dbPath, err)
+		fatalf("cannot read %s: %v", *dbPath, err)
 	}
 
 	// The hook and timer are bound to a thread — the main loop runs on one.
@@ -401,24 +453,37 @@ func main() {
 	runtime.LockOSThread()
 
 	t := &tracker{
-		engine:   NewEngine(winSystem{}, storeMemory{store}, fallback, log.Printf),
+		engine:   NewEngine(winSystem{}, storeMemory{store}, fallback, log.Printf, errorf),
 		verbose:  *verbose,
 		threadID: getCurrentThreadID(),
 	}
-	t.res = newResolver(t.threadID)
+	if !singleInstance() {
+		messageBox("change_lang is already running — see the icon in the notification area.")
+		return
+	}
+	tr, err := newTray(t.handleMessage)
+	if err != nil {
+		fatalf("tray: %v", err)
+	}
+	defer tr.close()
+	t.window = tr.hwnd
+	t.res = newResolver(t.window)
+	if err := initAutostart(); err != nil {
+		errorf("autostart: %v", err)
+	}
 	theTracker = t
 
 	if err := startHotkeyWatcher(); err != nil {
-		log.Fatalf("keyboard hook: %v", err)
+		fatalf("keyboard hook: %v", err)
 	}
 
-	timer, _, _ := procSetTimer.Call(0, 0, uintptr(interval.Milliseconds()), 0)
-	defer procKillTimer.Call(0, timer)
+	procSetTimer.Call(t.window, 1, uintptr(interval.Milliseconds()), 0)
+	defer procKillTimer.Call(t.window, 1)
 
 	hook, _, err := procSetWinEventHook.Call(eventObjectFocus, eventObjectFocus, 0,
 		syscall.NewCallback(winEventProc), 0, 0, wineventOutOfContext|wineventSkipOwnProcess)
 	if hook == 0 {
-		log.Fatalf("SetWinEventHook: %v", err)
+		fatalf("SetWinEventHook: %v", err)
 	}
 	defer procUnhookWinEvent.Call(hook)
 
@@ -436,19 +501,10 @@ func main() {
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
-			break
+			break // WM_QUIT: "Exit" in the tray menu or Ctrl+C
 		}
-		switch {
-		case m.Hwnd == 0 && m.Message == wmFocusChanged:
-			t.dispatch()
-		case m.Hwnd == 0 && m.Message == wmFieldResolved:
-			t.handleResolved()
-		case m.Hwnd == 0 && m.Message == wmTimer:
-			t.tick()
-		default:
-			procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
-			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
-		}
+		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
+		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	log.Println("Exiting.")
 }

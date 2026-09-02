@@ -60,8 +60,9 @@ type request struct {
 type Engine struct {
 	sys      System
 	mem      Memory
-	fallback func() HKL // layout for new fields; 0 — leave as is
-	logf     func(format string, args ...any)
+	fallback func() HKL                       // layout for new fields; 0 — leave as is
+	logf     func(format string, args ...any) // info: goes to the log file only with -log
+	errf     func(format string, args ...any) // errors: always go to the log file
 
 	cur      *Field    // field holding the caret; buttons and menus don't change it
 	focusAt  time.Time // when focus entered cur
@@ -70,8 +71,8 @@ type Engine struct {
 	inflight []request
 }
 
-func NewEngine(sys System, mem Memory, fallback func() HKL, logf func(string, ...any)) *Engine {
-	return &Engine{sys: sys, mem: mem, fallback: fallback, logf: logf}
+func NewEngine(sys System, mem Memory, fallback func() HKL, logf, errf func(string, ...any)) *Engine {
+	return &Engine{sys: sys, mem: mem, fallback: fallback, logf: logf, errf: errf}
 }
 
 // Focus is called on every focus change.
@@ -173,7 +174,7 @@ func (e *Engine) remember(h HKL) {
 		err = e.mem.Set(e.cur.Key, h)
 	}
 	if err != nil {
-		e.logf("cannot save: %v", err)
+		e.errf("cannot save: %v", err)
 		return
 	}
 	e.logf("[%s] %s: remembered %s", e.cur.App, e.cur.Name, h.Display())
@@ -193,7 +194,7 @@ func (e *Engine) desired(key string) (HKL, string) {
 
 func (e *Engine) request(h HKL) bool {
 	if !e.sys.Request(e.cur.Target, h) {
-		e.logf("[%s] %s: window rejected the request for %s (running as administrator?)", e.cur.App, e.cur.Name, h.Display())
+		e.errf("[%s] %s: window rejected the request for %s (running as administrator?)", e.cur.App, e.cur.Name, h.Display())
 		return false
 	}
 	e.inflight = append(e.inflight, request{h: h, at: e.sys.Now()})
@@ -229,7 +230,7 @@ func (e *Engine) prune() {
 			continue
 		}
 		if e.cur != nil && r.h == e.want && e.last != e.want {
-			e.logf("[%s] %s: app did not switch the layout to %s", e.cur.App, e.cur.Name, r.h.Display())
+			e.errf("[%s] %s: app did not switch the layout to %s", e.cur.App, e.cur.Name, r.h.Display())
 		}
 	}
 	e.inflight = kept
