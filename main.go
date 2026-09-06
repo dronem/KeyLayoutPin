@@ -67,7 +67,12 @@ type tracker struct {
 	gen       uint64 // id of the last event handed to the resolver
 	busy      bool   // resolver is processing an event
 	busySince time.Time
+	sentPID   uint32               // process of the event being resolved
+	hung      map[uint32]time.Time // hung processes → skipped until then
 }
+
+// hungSkip is how long focus events of a hung app are skipped.
+const hungSkip = 30 * time.Second
 
 var theTracker *tracker
 
@@ -108,8 +113,18 @@ func (t *tracker) dispatch() {
 		return
 	}
 	t.evNew = false
+	_, pid := windowThreadProcess(t.ev.hwnd)
+	if until, ok := t.hung[pid]; ok {
+		if time.Now().Before(until) {
+			return // the app is hung: asking it again would hang another thread
+		}
+		delete(t.hung, pid)
+	}
+	if stuckResolvers.Load() >= maxStuck {
+		return // too many threads stuck in hung apps; wait for some to return
+	}
 	t.gen++
-	t.busy, t.busySince = true, time.Now()
+	t.busy, t.busySince, t.sentPID = true, time.Now(), pid
 	t.res.reqs <- resolveReq{gen: t.gen, ev: t.ev}
 }
 
@@ -141,13 +156,13 @@ func (t *tracker) handleResolved() {
 
 func (t *tracker) tick() {
 	if t.busy && time.Since(t.busySince) > resolveTimeout {
-		_, pid := windowThreadProcess(t.ev.hwnd)
-		errorf("app %s is not responding — skipping", processName(pid))
-		close(t.res.reqs) // the hung thread exits when (if) it returns
+		stuck := t.res.abandon()
+		errorf("app %s is not responding — skipping it for %v (stuck threads: %d)",
+			processName(t.sentPID), hungSkip, stuck)
+		t.hung[t.sentPID] = time.Now().Add(hungSkip)
 		t.res = newResolver(t.window)
 		t.busy = false
-		t.evNew = true // retry the latest event on the new thread
-		t.dispatch()
+		t.dispatch() // a newer event may be waiting
 	}
 	t.engine.Tick()
 }
@@ -331,19 +346,6 @@ func flagSet(name string) bool {
 	return set
 }
 
-// maxLogSize keeps the log from growing forever and piling up history.
-const maxLogSize = 1 << 20
-
-// rotateLog renames a large log to .old on startup (the previous .old
-// is deleted), so at most two megabytes of history stay on disk.
-func rotateLog(path string) {
-	if st, err := os.Stat(path); err == nil && st.Size() > maxLogSize {
-		old := strings.TrimSuffix(path, filepath.Ext(path)) + ".old" + filepath.Ext(path)
-		os.Remove(old)
-		os.Rename(path, old)
-	}
-}
-
 func printLayouts() {
 	def := defaultInputLayout()
 	fmt.Println("Installed layouts:")
@@ -374,6 +376,15 @@ func main() {
 	// Diagnostic modes print field labels and window titles — they go to
 	// a file only if -log was given explicitly, never to the default log.
 	diagnostic := *watchFor > 0 || *probeFor > 0 || *list || *reset
+	// Check this before touching any shared file (memory migration, log
+	// rotation): a second copy must leave everything as it is.
+	if (!diagnostic || *reset) && !singleInstance() {
+		if *reset {
+			fatalf("change_lang is running — exit it first (tray icon → Exit), otherwise it rewrites the memory")
+		}
+		messageBox("change_lang is already running — see the icon in the notification area.")
+		return
+	}
 	if logOpt.path != "off" {
 		resolvePathFlag("log")
 	}
@@ -391,9 +402,7 @@ func main() {
 
 	infoOut, errOut := teeWriter{os.Stderr}, teeWriter{os.Stderr}
 	if logFile != "" {
-		os.MkdirAll(filepath.Dir(logFile), 0o700)
-		rotateLog(logFile)
-		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		f, err := openRotating(logFile, maxLogSize)
 		if err != nil {
 			fatalf("cannot open log: %v", err)
 		}
@@ -456,16 +465,14 @@ func main() {
 		engine:   NewEngine(winSystem{}, storeMemory{store}, fallback, log.Printf, errorf),
 		verbose:  *verbose,
 		threadID: getCurrentThreadID(),
-	}
-	if !singleInstance() {
-		messageBox("change_lang is already running — see the icon in the notification area.")
-		return
+		hung:     map[uint32]time.Time{},
 	}
 	tr, err := newTray(t.handleMessage)
 	if err != nil {
 		fatalf("tray: %v", err)
 	}
 	defer tr.close()
+	atExit(tr.close) // fatalf skips defers — don't leave a ghost icon
 	t.window = tr.hwnd
 	t.res = newResolver(t.window)
 	if err := initAutostart(); err != nil {
@@ -477,7 +484,9 @@ func main() {
 		fatalf("keyboard hook: %v", err)
 	}
 
-	procSetTimer.Call(t.window, 1, uintptr(interval.Milliseconds()), 0)
+	if r, _, err := procSetTimer.Call(t.window, 1, uintptr(interval.Milliseconds()), 0); r == 0 {
+		fatalf("SetTimer: %v", err) // without the timer layout changes go unnoticed
+	}
 	defer procKillTimer.Call(t.window, 1)
 
 	hook, _, err := procSetWinEventHook.Call(eventObjectFocus, eventObjectFocus, 0,

@@ -3,9 +3,11 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"flag"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -110,20 +112,80 @@ func regDeleteValue(path, name string) error {
 	return nil
 }
 
-// autostartCommand is the command line written to the Run key: this exe
-// with the flags it was started with. Path flags are already resolved to
-// absolute paths (see resolvePathFlag), because autostart runs with
-// a different working directory.
+// persistentFlags are the settings worth repeating at every login.
+// Diagnostics (-v, -watch, -probe) and one-shot actions (-list, -reset)
+// must never end up in autostart: -v would keep writing field labels to disk.
+var persistentFlags = map[string]bool{"db": true, "default": true, "chromium": true, "interval": true, "log": true}
+
+const (
+	guiExeName        = "change_lang_bg.exe"
+	subsystemGUI      = 2
+	peSignatureOffset = 0x3C
+)
+
+// autostartCommand is the command line written to the Run key: the GUI
+// build (so no console window opens at login) with the persistent flags
+// given on the command line. Path flags are already resolved to absolute
+// paths (see resolvePathFlag): autostart runs with a different working
+// directory.
 func autostartCommand() (string, error) {
-	exe, err := os.Executable()
+	exe, err := autostartExe()
 	if err != nil {
 		return "", err
 	}
-	parts := []string{syscall.EscapeArg(exe)}
-	flag.Visit(func(f *flag.Flag) {
-		parts = append(parts, syscall.EscapeArg("-"+f.Name+"="+f.Value.String()))
+	return strings.Join(append([]string{syscall.EscapeArg(exe)}, autostartArgs(flag.CommandLine)...), " "), nil
+}
+
+func autostartArgs(fs *flag.FlagSet) []string {
+	var args []string
+	fs.Visit(func(f *flag.Flag) {
+		if persistentFlags[f.Name] {
+			args = append(args, syscall.EscapeArg("-"+f.Name+"="+f.Value.String()))
+		}
 	})
-	return strings.Join(parts, " "), nil
+	return args
+}
+
+// autostartExe picks the exe to start at login: this one if it is a GUI
+// build, otherwise change_lang_bg.exe next to it if that one is.
+func autostartExe() (string, error) {
+	self, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	if s, _ := peSubsystem(self); s == subsystemGUI {
+		return self, nil
+	}
+	gui := filepath.Join(filepath.Dir(self), guiExeName)
+	if s, _ := peSubsystem(gui); s == subsystemGUI {
+		return gui, nil
+	}
+	return self, nil
+}
+
+// peSubsystem reads the Subsystem field of a PE file: 2 = GUI, 3 = console.
+func peSubsystem(path string) (uint16, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	var off [4]byte
+	if _, err := f.ReadAt(off[:], peSignatureOffset); err != nil {
+		return 0, err
+	}
+	pe := int64(binary.LittleEndian.Uint32(off[:]))
+	var sig [4]byte
+	if _, err := f.ReadAt(sig[:], pe); err != nil || string(sig[:]) != "PE\x00\x00" {
+		return 0, errors.New("not a PE file")
+	}
+	// Signature (4) + COFF file header (20) + offset of Subsystem in the
+	// optional header (68, same for PE32 and PE32+).
+	var sub [2]byte
+	if _, err := f.ReadAt(sub[:], pe+4+20+68); err != nil {
+		return 0, err
+	}
+	return binary.LittleEndian.Uint16(sub[:]), nil
 }
 
 // commandExe extracts the executable path from a Run command line.

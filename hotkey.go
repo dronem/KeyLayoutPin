@@ -87,24 +87,51 @@ func keyboardProc(nCode, wParam, lParam uintptr) uintptr {
 	return r
 }
 
+// hookRefresh: Windows silently removes a low-level hook whose callback
+// was once too slow (LowLevelHooksTimeout), and there is no notification.
+// Re-installing it periodically bounds how long hotkeys can go unnoticed.
+const hookRefresh = 5 * time.Minute
+
+var keyboardProcPtr = syscall.NewCallback(keyboardProc)
+
+func installKeyboardHook() (uintptr, error) {
+	module, _, _ := procGetModuleHandleW.Call(0)
+	hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, keyboardProcPtr, module, 0)
+	if hook == 0 {
+		return 0, err
+	}
+	return hook, nil
+}
+
 // startHotkeyWatcher starts the keyboard hook thread.
 func startHotkeyWatcher() error {
 	errc := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
-		module, _, _ := procGetModuleHandleW.Call(0)
-		hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, syscall.NewCallback(keyboardProc), module, 0)
-		if hook == 0 {
+		hook, err := installKeyboardHook()
+		if err != nil {
 			errc <- err
 			return
 		}
-		defer procUnhookWindowsHookEx.Call(hook)
 		errc <- nil
+		// A thread timer: this thread runs no modal loops, so thread
+		// messages are safe here.
+		procSetTimer.Call(0, 0, uintptr(hookRefresh.Milliseconds()), 0)
 		var m msg
 		for {
 			r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 			if int32(r) <= 0 {
+				procUnhookWindowsHookEx.Call(hook)
 				return
+			}
+			if m.Hwnd == 0 && m.Message == wmTimer {
+				// Install the new hook first, so there is no gap.
+				if fresh, err := installKeyboardHook(); err == nil {
+					procUnhookWindowsHookEx.Call(hook)
+					hook = fresh
+				} else {
+					errorf("keyboard hook refresh: %v", err)
+				}
 			}
 		}
 	}()

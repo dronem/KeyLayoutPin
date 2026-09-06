@@ -3,6 +3,9 @@
 package main
 
 import (
+	"flag"
+	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -67,5 +70,34 @@ func TestSingleInstance(t *testing.T) {
 	}
 	if singleInstance() {
 		t.Fatal("second instance must be refused")
+	}
+}
+
+func TestAutostartArgsKeepOnlyPersistentFlags(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.String("db", "", "")
+	fs.String("default", "", "")
+	fs.Bool("v", false, "")
+	fs.Bool("list", false, "")
+	fs.String("log", "", "")
+	fs.Duration("watch", 0, "")
+	if err := fs.Parse([]string{`-db=C:\a b\m.json`, "-v", "-default=ja", "-watch=3m", `-log=C:\l.txt`}); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(autostartArgs(fs), " ")
+	want := `"-db=C:\a b\m.json" -default=ja -log=C:\l.txt`
+	if got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+}
+
+func TestPESubsystem(t *testing.T) {
+	self, _ := os.Executable() // the test binary is a console program
+	s, err := peSubsystem(self)
+	if err != nil || s != 3 {
+		t.Fatalf("subsystem of %s = %d, %v; want 3 (console)", self, s, err)
+	}
+	if _, err := peSubsystem("autostart.go"); err == nil {
+		t.Fatal("a non-PE file must be rejected")
 	}
 }

@@ -35,8 +35,9 @@ The app lives in the notification area (the blue "Aa" icon). Click it for the me
 - **Start with Windows** — checked when the app starts at login. On the very first run
   autostart is turned on automatically; uncheck it to turn it off, and it stays off.
   The entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\change_lang`) starts
-  the same exe with the same flags it is running with now — so enable it from
-  `change_lang_bg.exe`, otherwise a console window opens at login.
+  the GUI build — this exe if it is one, otherwise `change_lang_bg.exe` next to it — so
+  no console window opens at login. Only persistent flags are kept (`-db`, `-default`,
+  `-chromium`, `-interval`, `-log`); `-v` and diagnostic flags never get there.
 - **Exit**.
 
 Only one copy runs at a time: a second start just shows a message and exits.
@@ -52,7 +53,7 @@ Only one copy runs at a time: a second start just shows a message and exits.
 | `-chromium` | `true`                               | enable accessibility in Chrome/Edge/VS Code etc. (`-chromium=false` disables it, but then fields inside pages can't be told apart) |
 | `-v`        | —                                    | verbose log: every focus change with role and key |
 | `-list`     | —                                    | list installed layouts and exit |
-| `-reset`    | —                                    | forget everything and exit |
+| `-reset`    | —                                    | forget everything and exit (refuses while the app is running, since it would write the memory back) |
 | `-watch`    | —                                    | diagnostics: e.g. `-watch 3m` logs every focus event and layout change without switching anything |
 | `-probe`    | —                                    | diagnostics: e.g. `-probe 30s` prints what has focus once a second |
 

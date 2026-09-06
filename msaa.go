@@ -51,6 +51,11 @@ func coInitialize() {
 	procCoInitializeEx.Call(0, coinitApartmentThreaded)
 }
 
+func coInitializeMTA() uintptr {
+	hr, _, _ := procCoInitializeEx.Call(0, coinitMultithreaded)
+	return hr
+}
+
 func coUninitialize() {
 	procCoUninitialize.Call()
 }

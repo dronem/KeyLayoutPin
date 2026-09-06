@@ -71,6 +71,7 @@ const (
 	spiGetDefaultInputLang   = 0x0059
 	processQueryLimitedInfo  = 0x1000
 	coinitApartmentThreaded  = 0x2
+	coinitMultithreaded      = 0x0
 	localeNameMaxLength      = 85
 	localeAllowNeutralNames  = 0x08000000
 )

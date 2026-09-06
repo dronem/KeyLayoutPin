@@ -54,11 +54,19 @@ func resolvePathFlag(name string) {
 	f.Value.Set(p)
 }
 
+// exitHooks run on fatalf, which exits without running deferred calls.
+var exitHooks []func()
+
+func atExit(f func()) { exitHooks = append(exitHooks, f) }
+
 // fatalf reports a startup error and exits. The GUI build has no console,
 // so there the error is also shown in a message box instead of vanishing.
 func fatalf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	errorf("%s", msg) // console and, once set up, the log file
+	for i := len(exitHooks) - 1; i >= 0; i-- {
+		exitHooks[i]()
+	}
 	if c, _, _ := procGetConsoleWindow.Call(); c == 0 {
 		messageBox("change_lang cannot start:\n\n" + msg)
 	} else {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -30,7 +31,8 @@ type resolved struct {
 // so the main thread (hook, timer, layout switching) never waits on
 // other applications.
 type resolver struct {
-	reqs chan resolveReq
+	reqs      chan resolveReq
+	abandoned atomic.Bool
 }
 
 type resolveReq struct {
@@ -38,17 +40,32 @@ type resolveReq struct {
 	ev  focusEvent
 }
 
+// maxStuck caps how many abandoned (hung) resolver threads may exist at
+// once; beyond that new focus events are skipped until some come back.
+const maxStuck = 8
+
 var (
 	resultsMu sync.Mutex
 	results   []resolved
+
+	stuckResolvers atomic.Int32
 )
 
 func newResolver(window uintptr) *resolver {
 	r := &resolver{reqs: make(chan resolveReq, 1)}
 	go func() {
 		runtime.LockOSThread()
-		coInitialize()
+		// MTA rather than STA: an STA thread must keep pumping messages,
+		// while this one waits on a Go channel between requests.
+		if hr := coInitializeMTA(); int32(hr) < 0 {
+			errorf("COM init failed: 0x%08X", uint32(hr))
+		}
 		defer coUninitialize()
+		defer func() {
+			if r.abandoned.Load() {
+				stuckResolvers.Add(-1)
+			}
+		}()
 		for req := range r.reqs {
 			f, ok := describeFocus(req.ev.hwnd, req.ev.obj, req.ev.child)
 			resultsMu.Lock()
@@ -58,6 +75,14 @@ func newResolver(window uintptr) *resolver {
 		}
 	}()
 	return r
+}
+
+// abandon gives up on a resolver stuck in a hung app. Its thread exits
+// when (if) the call returns; its late result is ignored by generation.
+func (r *resolver) abandon() int32 {
+	r.abandoned.Store(true)
+	close(r.reqs)
+	return stuckResolvers.Add(1)
 }
 
 func takeResults() []resolved {
