@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"unsafe"
+
+	"change_lang/internal/kbd"
 )
 
 var (
@@ -70,7 +72,6 @@ const (
 	gaRoot                   = 2
 	spiGetDefaultInputLang   = 0x0059
 	processQueryLimitedInfo  = 0x1000
-	coinitApartmentThreaded  = 0x2
 	coinitMultithreaded      = 0x0
 	localeNameMaxLength      = 85
 	localeAllowNeutralNames  = 0x08000000
@@ -102,24 +103,21 @@ type guiThreadInfo struct {
 	RcCaret       rect
 }
 
-// HKL is a keyboard layout handle.
-type HKL uintptr
+// HKL is the platform-neutral layout handle; this file adds the parts
+// that need Windows (names).
+type HKL = kbd.HKL
 
-func (h HKL) LangID() uint16 { return uint16(h & 0xFFFF) }
-
-func (h HKL) String() string { return fmt.Sprintf("0x%08X", uint64(h)) }
-
-// Display returns the language plus the keyboard variant if different: "en-US (0415)".
-func (h HKL) Display() string {
-	name := h.LocaleName()
-	if hi := uint16(h >> 16); hi != h.LangID() {
-		name += fmt.Sprintf(" (%04X)", hi)
+// layoutName returns the language plus the keyboard variant if different: "en-US (0415)".
+func layoutName(h HKL) string {
+	name := localeName(h)
+	if h.Variant() != h.LangID() {
+		name += fmt.Sprintf(" (%04X)", h.Variant())
 	}
 	return name
 }
 
-// LocaleName returns the layout's language name, e.g. "en-US" or "ja-JP".
-func (h HKL) LocaleName() string {
+// localeName returns the layout's language name, e.g. "en-US" or "ja-JP".
+func localeName(h HKL) string {
 	buf := make([]uint16, localeNameMaxLength)
 	n, _, _ := procLCIDToLocaleName.Call(uintptr(h.LangID()), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), localeAllowNeutralNames)
 	if n == 0 {

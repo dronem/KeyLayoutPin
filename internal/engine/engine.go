@@ -1,8 +1,13 @@
-//go:build windows
+// Package engine decides when to switch the keyboard layout and when to
+// remember it. It knows nothing about Windows: the OS is behind System,
+// the persistent memory behind Memory.
+package engine
 
-package main
+import (
+	"time"
 
-import "time"
+	"change_lang/internal/kbd"
+)
 
 const (
 	// requestTTL is how long to wait for an app to apply our layout
@@ -16,21 +21,48 @@ const (
 	guardWindow = time.Second
 )
 
+// Kind tells what received focus.
+type Kind int
+
+const (
+	// NotField: a button, menu, list, the taskbar… The layout is left
+	// alone and the last field stays current.
+	NotField Kind = iota
+	// Input: an input field identified via accessibility.
+	Input
+	// Window: the app doesn't say what has focus (games, custom controls),
+	// so the whole window counts as one field.
+	Window
+)
+
+// IsField reports whether the layout should be tracked for this focus.
+func (k Kind) IsField() bool { return k != NotField }
+
+func (k Kind) String() string {
+	switch k {
+	case Input:
+		return "field"
+	case Window:
+		return "window"
+	}
+	return "not a field"
+}
+
 // Field is the object that received focus.
 type Field struct {
-	Key      string  // unique field key for the memory
-	App      string  // exe name, for the log
-	Name     string  // field name, for the log
-	Root     uintptr // top-level window
-	Tid      uint32  // window thread (the layout is read from it)
-	Target   uintptr // window that receives layout change requests
-	Editable bool    // input field; false for buttons, menus, lists, etc.
+	Key    string  // unique field key for the memory
+	App    string  // exe name, for the log
+	Name   string  // field name, for the log
+	Root   uintptr // top-level window
+	Tid    uint32  // window thread (the layout is read from it)
+	Target uintptr // window that receives layout change requests
+	Kind   Kind
 }
 
 // System is everything the engine needs from Windows (faked in tests).
 type System interface {
-	Layout(tid uint32) HKL
-	Request(target uintptr, h HKL) bool
+	Layout(tid uint32) kbd.HKL
+	Request(target uintptr, h kbd.HKL) bool
 	Foreground() uintptr   // top-level foreground window
 	LastHotkey() time.Time // when a layout switch hotkey was last pressed
 	Now() time.Time
@@ -38,13 +70,13 @@ type System interface {
 
 // Memory is the "field → layout" memory.
 type Memory interface {
-	Get(key string) (HKL, bool)
-	Set(key string, h HKL) error
+	Get(key string) (kbd.HKL, bool)
+	Set(key string, h kbd.HKL) error
 	Forget(key string) error
 }
 
 type request struct {
-	h  HKL
+	h  kbd.HKL
 	at time.Time
 }
 
@@ -60,19 +92,41 @@ type request struct {
 type Engine struct {
 	sys      System
 	mem      Memory
-	fallback func() HKL                       // layout for new fields; 0 — leave as is
-	logf     func(format string, args ...any) // info: goes to the log file only with -log
-	errf     func(format string, args ...any) // errors: always go to the log file
+	fallback func() kbd.HKL
+	logf     func(format string, args ...any)
+	errf     func(format string, args ...any)
+	name     func(kbd.HKL) string
 
 	cur      *Field    // field holding the caret; buttons and menus don't change it
 	focusAt  time.Time // when focus entered cur
-	want     HKL       // layout cur should have (0 — any)
-	last     HKL       // last observed layout
+	want     kbd.HKL   // layout cur should have (0 — any)
+	last     kbd.HKL   // last observed layout
 	inflight []request
 }
 
-func NewEngine(sys System, mem Memory, fallback func() HKL, logf, errf func(string, ...any)) *Engine {
-	return &Engine{sys: sys, mem: mem, fallback: fallback, logf: logf, errf: errf}
+// Config wires an Engine to the outside world.
+type Config struct {
+	System   System
+	Memory   Memory
+	Fallback func() kbd.HKL                   // layout for new fields; nil or 0 — leave as is
+	Logf     func(format string, args ...any) // informational messages
+	Errf     func(format string, args ...any) // errors
+	Name     func(kbd.HKL) string             // layout name for messages, e.g. "ja-JP"
+}
+
+func New(c Config) *Engine {
+	e := &Engine{sys: c.System, mem: c.Memory, fallback: c.Fallback, logf: c.Logf, errf: c.Errf, name: c.Name}
+	nop := func(string, ...any) {}
+	if e.logf == nil {
+		e.logf = nop
+	}
+	if e.errf == nil {
+		e.errf = nop
+	}
+	if e.name == nil {
+		e.name = kbd.HKL.String
+	}
+	return e
 }
 
 // Focus is called on every focus change.
@@ -83,7 +137,7 @@ func (e *Engine) Focus(f Field) {
 
 	// Buttons, menus, lists, the taskbar are not fields: leave the layout,
 	// the last field stays current.
-	if !f.Editable {
+	if !f.Kind.IsField() {
 		return
 	}
 
@@ -99,12 +153,12 @@ func (e *Engine) Focus(f Field) {
 	e.want = want
 	if want == 0 || want == e.last {
 		if !same && want != 0 {
-			e.logf("[%s] %s: %s (%s)", f.App, f.Name, want.Display(), why)
+			e.logf("[%s] %s: %s (%s)", f.App, f.Name, e.name(want), why)
 		}
 		return
 	}
 	if e.request(want) {
-		e.logf("[%s] %s: %s → %s (%s)", f.App, f.Name, e.last.Display(), want.Display(), why)
+		e.logf("[%s] %s: %s → %s (%s)", f.App, f.Name, e.name(e.last), e.name(want), why)
 	}
 }
 
@@ -139,7 +193,7 @@ func (e *Engine) Tick() {
 		e.remember(h)
 
 	case e.want != 0 && h != e.want && now.Sub(e.focusAt) <= guardWindow && !e.pending(e.want):
-		e.logf("[%s] %s: layout changed without you (%s) — restoring %s", e.cur.App, e.cur.Name, h.Display(), e.want.Display())
+		e.logf("[%s] %s: layout changed without you (%s) — restoring %s", e.cur.App, e.cur.Name, e.name(h), e.name(e.want))
 		e.request(e.want)
 	}
 }
@@ -166,7 +220,7 @@ func (e *Engine) leave() {
 // remember stores the current field's layout. If it equals the
 // default layout, no entry is needed and it is removed: the less
 // is stored about where you typed, the better.
-func (e *Engine) remember(h HKL) {
+func (e *Engine) remember(h kbd.HKL) {
 	var err error
 	if e.fallback != nil && e.fallback() == h {
 		err = e.mem.Forget(e.cur.Key)
@@ -177,10 +231,10 @@ func (e *Engine) remember(h HKL) {
 		e.errf("cannot save: %v", err)
 		return
 	}
-	e.logf("[%s] %s: remembered %s", e.cur.App, e.cur.Name, h.Display())
+	e.logf("[%s] %s: remembered %s", e.cur.App, e.cur.Name, e.name(h))
 }
 
-func (e *Engine) desired(key string) (HKL, string) {
+func (e *Engine) desired(key string) (kbd.HKL, string) {
 	if h, ok := e.mem.Get(key); ok {
 		return h, "remembered"
 	}
@@ -192,9 +246,9 @@ func (e *Engine) desired(key string) (HKL, string) {
 	return 0, ""
 }
 
-func (e *Engine) request(h HKL) bool {
+func (e *Engine) request(h kbd.HKL) bool {
 	if !e.sys.Request(e.cur.Target, h) {
-		e.errf("[%s] %s: window rejected the request for %s (running as administrator?)", e.cur.App, e.cur.Name, h.Display())
+		e.errf("[%s] %s: window rejected the request for %s (running as administrator?)", e.cur.App, e.cur.Name, e.name(h))
 		return false
 	}
 	e.inflight = append(e.inflight, request{h: h, at: e.sys.Now()})
@@ -202,7 +256,7 @@ func (e *Engine) request(h HKL) bool {
 }
 
 // consume removes a request for h from inflight, if present.
-func (e *Engine) consume(h HKL) bool {
+func (e *Engine) consume(h kbd.HKL) bool {
 	for i, r := range e.inflight {
 		if r.h == h {
 			e.inflight = append(e.inflight[:i], e.inflight[i+1:]...)
@@ -212,7 +266,7 @@ func (e *Engine) consume(h HKL) bool {
 	return false
 }
 
-func (e *Engine) pending(h HKL) bool {
+func (e *Engine) pending(h kbd.HKL) bool {
 	for _, r := range e.inflight {
 		if r.h == h {
 			return true
@@ -230,7 +284,7 @@ func (e *Engine) prune() {
 			continue
 		}
 		if e.cur != nil && r.h == e.want && e.last != e.want {
-			e.errf("[%s] %s: app did not switch the layout to %s", e.cur.App, e.cur.Name, r.h.Display())
+			e.errf("[%s] %s: app did not switch the layout to %s", e.cur.App, e.cur.Name, e.name(r.h))
 		}
 	}
 	e.inflight = kept

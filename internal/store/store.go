@@ -1,6 +1,15 @@
-//go:build windows
-
-package main
+// Package store persists the "field → keyboard layout" memory.
+//
+// The memory keeps only what it cannot do without:
+//   - instead of the field key (app, field label) — its salted SHA-256,
+//     because field labels can be personal (a payment code, a contact's name);
+//   - no timestamps or names: only the layout and a sequence number,
+//     used to drop the oldest entries once there are more than maxEntries.
+//
+// The salt is random per installation, so precomputed hash tables
+// are useless; but whoever has the file can still test a specific
+// guess ("was there field X in app Y?") — hashing does not prevent that.
+package store
 
 import (
 	"crypto/rand"
@@ -11,35 +20,19 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strconv"
-)
 
-// The memory keeps only what it cannot do without:
-//   - instead of the field key (app, field label) — its salted SHA-256,
-//     because field labels can be personal (a payment code, a contact's name);
-//   - no timestamps or names: only the layout and a sequence number,
-//     used to drop the oldest entries once there are more than maxEntries.
-// The salt is random per installation, so precomputed hash tables
-// are useless; but whoever has the file can still test a specific
-// guess ("was there field X in app Y?") — hashing does not prevent that.
+	"change_lang/internal/kbd"
+)
 
 const (
-	storeVersion = 2
-	maxEntries   = 1000
+	version    = 2
+	maxEntries = 1000
 )
 
-// Entry is the remembered layout of a single field.
-type Entry struct {
+// entry is the remembered layout of a single field.
+type entry struct {
 	Layout string `json:"layout"` // HKL in hex, e.g. 0x04110411
 	Seq    uint64 `json:"seq"`    // write order — used to drop old entries
-}
-
-func (e Entry) HKL() (HKL, bool) {
-	v, err := strconv.ParseUint(e.Layout, 0, 64)
-	if err != nil {
-		return 0, false
-	}
-	return HKL(v), true
 }
 
 // Store holds the "field hash → layout" memory and persists it to disk.
@@ -48,16 +41,12 @@ type Store struct {
 	Version int              `json:"version"`
 	Salt    string           `json:"salt"`
 	Seq     uint64           `json:"seq"`
-	Entries map[string]Entry `json:"entries"`
+	Entries map[string]entry `json:"entries"`
 }
 
-// defaultStorePath is under %LOCALAPPDATA%: unlike Roaming, this folder
-// is not synced to servers along with the user profile.
-func defaultStorePath() string {
-	return filepath.Join(localDataDir(), "layouts.json")
-}
-
-func localDataDir() string {
+// DataDir is the app's data folder under %LOCALAPPDATA%: unlike Roaming,
+// it is not synced to servers along with the user profile.
+func DataDir() string {
 	dir := os.Getenv("LOCALAPPDATA")
 	if dir == "" {
 		dir = "."
@@ -65,8 +54,13 @@ func localDataDir() string {
 	return filepath.Join(dir, "change_lang")
 }
 
-// legacyStorePath is where old versions kept the memory (in plain text).
-func legacyStorePath() string {
+// DefaultPath is where the memory lives unless -db says otherwise.
+func DefaultPath() string {
+	return filepath.Join(DataDir(), "layouts.json")
+}
+
+// legacyPath is where old versions kept the memory (in plain text).
+func legacyPath() string {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return ""
@@ -81,12 +75,13 @@ type legacyStore struct {
 	} `json:"entries"`
 }
 
-func loadStore(path string) (*Store, error) {
-	s := &Store{path: path, Version: storeVersion, Entries: map[string]Entry{}}
+// Open loads the memory at path. On the very first run at the default
+// path, the old plain-text memory is migrated and deleted.
+func Open(path string) (*Store, error) {
+	s := &Store{path: path, Version: version, Entries: map[string]entry{}}
 	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) && path == defaultStorePath() {
-		// First run of the new version — migrate the old memory, if any.
-		if old := legacyStorePath(); old != "" {
+	if errors.Is(err, fs.ErrNotExist) && path == DefaultPath() {
+		if old := legacyPath(); old != "" {
 			if data, err = os.ReadFile(old); err == nil {
 				if err := s.migrate(data); err != nil {
 					return nil, err
@@ -107,14 +102,14 @@ func loadStore(path string) (*Store, error) {
 		if err := json.Unmarshal(data, &head); err != nil {
 			return nil, err
 		}
-		if head.Version < storeVersion {
+		if head.Version < version {
 			return s, s.migrate(data) // an old-format file passed via -db
 		}
 		if err := json.Unmarshal(data, s); err != nil {
 			return nil, err
 		}
 		if s.Entries == nil {
-			s.Entries = map[string]Entry{}
+			s.Entries = map[string]entry{}
 		}
 	}
 	if s.Salt == "" {
@@ -137,7 +132,7 @@ func (s *Store) migrate(data []byte) error {
 	}
 	for key, e := range old.Entries {
 		s.Seq++
-		s.Entries[s.hash(key)] = Entry{Layout: e.Layout, Seq: s.Seq}
+		s.Entries[s.hash(key)] = entry{Layout: e.Layout, Seq: s.Seq}
 	}
 	s.trim()
 	return s.save()
@@ -157,22 +152,31 @@ func (s *Store) hash(key string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func (s *Store) Get(key string) (Entry, bool) {
+// Len is the number of remembered fields.
+func (s *Store) Len() int { return len(s.Entries) }
+
+// Get returns the layout remembered for a field key.
+func (s *Store) Get(key string) (kbd.HKL, bool) {
 	e, ok := s.Entries[s.hash(key)]
-	return e, ok
+	if !ok {
+		return 0, false
+	}
+	return kbd.Parse(e.Layout)
 }
 
-func (s *Store) Set(key string, layout HKL) error {
+// Set remembers the layout of a field and saves the file.
+func (s *Store) Set(key string, layout kbd.HKL) error {
 	k := s.hash(key)
 	if old, ok := s.Entries[k]; ok && old.Layout == layout.String() {
 		return nil
 	}
 	s.Seq++
-	s.Entries[k] = Entry{Layout: layout.String(), Seq: s.Seq}
+	s.Entries[k] = entry{Layout: layout.String(), Seq: s.Seq}
 	s.trim()
 	return s.save()
 }
 
+// Forget removes a field's entry and saves the file.
 func (s *Store) Forget(key string) error {
 	k := s.hash(key)
 	if _, ok := s.Entries[k]; !ok {

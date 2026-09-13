@@ -1,12 +1,12 @@
-//go:build windows
-
-package main
+package store
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"change_lang/internal/kbd"
 )
 
 const legacyJSON = `{
@@ -35,26 +35,27 @@ func noPlaintext(t *testing.T, path string) {
 
 func TestMigrateFromRoaming(t *testing.T) {
 	roaming, local := t.TempDir(), t.TempDir()
-	t.Setenv("APPDATA", roaming)
+	t.Setenv("APPDATA", roaming)         // os.UserConfigDir on Windows
+	t.Setenv("XDG_CONFIG_HOME", roaming) // os.UserConfigDir elsewhere
 	t.Setenv("LOCALAPPDATA", local)
 	old := filepath.Join(roaming, "change_lang", "layouts.json")
 	os.MkdirAll(filepath.Dir(old), 0o700)
 	os.WriteFile(old, []byte(legacyJSON), 0o600)
 
-	s, err := loadStore(defaultStorePath())
+	s, err := Open(DefaultPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e, ok := s.Get(secretKey); !ok || e.Layout != "0x04110411" {
-		t.Fatalf("entry lost after migration: %+v %v", e, ok)
+	if h, ok := s.Get(secretKey); !ok || h != 0x04110411 {
+		t.Fatalf("entry lost after migration: %v %v", h, ok)
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Fatal("the old plain-text file must be deleted")
 	}
-	noPlaintext(t, defaultStorePath())
+	noPlaintext(t, DefaultPath())
 
 	// Reload — same salt, the entry is still there.
-	s2, err := loadStore(defaultStorePath())
+	s2, err := Open(DefaultPath())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +67,7 @@ func TestMigrateFromRoaming(t *testing.T) {
 func TestMigrateCustomPathInPlace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "my.json")
 	os.WriteFile(path, []byte(legacyJSON), 0o600)
-	s, err := loadStore(path)
+	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,15 +78,15 @@ func TestMigrateCustomPathInPlace(t *testing.T) {
 }
 
 func TestTrimKeepsNewest(t *testing.T) {
-	s, err := loadStore(filepath.Join(t.TempDir(), "m.json"))
+	s, err := Open(filepath.Join(t.TempDir(), "m.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < maxEntries+5; i++ {
-		s.Entries[s.hash(string(rune(i)))] = Entry{Layout: "0x04110411", Seq: uint64(i + 1)}
+		s.Entries[s.hash(string(rune(i)))] = entry{Layout: "0x04110411", Seq: uint64(i + 1)}
 	}
 	s.Seq = maxEntries + 5
-	if err := s.Set("newest", HKL(0x04090409)); err != nil {
+	if err := s.Set("newest", kbd.HKL(0x04090409)); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.Entries) != maxEntries {

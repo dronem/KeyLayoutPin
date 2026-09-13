@@ -1,39 +1,39 @@
-//go:build windows
-
-package main
+package engine
 
 import (
 	"testing"
 	"time"
+
+	"change_lang/internal/kbd"
 )
 
 const (
-	en HKL = 0x04090409
-	ja HKL = 0x04110411
+	en kbd.HKL = 0x04090409
+	ja kbd.HKL = 0x04110411
 )
 
 // fakeSystem: a single global layout (the Windows default), layout
 // change requests queue up until the test "delivers" them.
 type fakeSystem struct {
-	layout HKL
-	queue  []HKL
+	layout kbd.HKL
+	queue  []kbd.HKL
 	now    time.Time
 	fg     uintptr   // foreground window
 	hotkey time.Time // last Ctrl+Shift press
 }
 
-func (s *fakeSystem) Layout(uint32) HKL             { return s.layout }
-func (s *fakeSystem) Request(_ uintptr, h HKL) bool { s.queue = append(s.queue, h); return true }
-func (s *fakeSystem) Now() time.Time                { return s.now }
-func (s *fakeSystem) wait(d time.Duration)          { s.now = s.now.Add(d) }
-func (s *fakeSystem) Foreground() uintptr           { return s.fg }
-func (s *fakeSystem) LastHotkey() time.Time         { return s.hotkey }
+func (s *fakeSystem) Layout(uint32) kbd.HKL             { return s.layout }
+func (s *fakeSystem) Request(_ uintptr, h kbd.HKL) bool { s.queue = append(s.queue, h); return true }
+func (s *fakeSystem) Now() time.Time                    { return s.now }
+func (s *fakeSystem) wait(d time.Duration)              { s.now = s.now.Add(d) }
+func (s *fakeSystem) Foreground() uintptr               { return s.fg }
+func (s *fakeSystem) LastHotkey() time.Time             { return s.hotkey }
 
 // userSwitch: the user pressed Ctrl+Shift.
-func (s *fakeSystem) userSwitch(h HKL) { s.layout, s.hotkey = h, s.now }
+func (s *fakeSystem) userSwitch(h kbd.HKL) { s.layout, s.hotkey = h, s.now }
 
 // external: someone else changed the layout (Windows, the app).
-func (s *fakeSystem) external(h HKL) { s.layout = h }
+func (s *fakeSystem) external(h kbd.HKL) { s.layout = h }
 
 // deliver: the app applied all requests.
 func (s *fakeSystem) deliver() {
@@ -48,27 +48,26 @@ func (s *fakeSystem) deliverOne() {
 	s.layout, s.queue = s.queue[0], s.queue[1:]
 }
 
-type fakeMemory map[string]HKL
+type fakeMemory map[string]kbd.HKL
 
-func (m fakeMemory) Get(k string) (HKL, bool)  { h, ok := m[k]; return h, ok }
-func (m fakeMemory) Set(k string, h HKL) error { m[k] = h; return nil }
-func (m fakeMemory) Forget(k string) error     { delete(m, k); return nil }
+func (m fakeMemory) Get(k string) (kbd.HKL, bool)  { h, ok := m[k]; return h, ok }
+func (m fakeMemory) Set(k string, h kbd.HKL) error { m[k] = h; return nil }
+func (m fakeMemory) Forget(k string) error         { delete(m, k); return nil }
 
-func setup(def HKL) (*fakeSystem, fakeMemory, *Engine) {
+func setup(def kbd.HKL) (*fakeSystem, fakeMemory, *Engine) {
 	sys := &fakeSystem{layout: en, now: time.Unix(100, 0), fg: 1}
 	mem := fakeMemory{}
-	nop := func(string, ...any) {}
-	e := NewEngine(sys, mem, func() HKL { return def }, nop, nop)
+	e := New(Config{System: sys, Memory: mem, Fallback: func() kbd.HKL { return def }})
 	return sys, mem, e
 }
 
 func field(key string, root uintptr) Field {
-	return Field{Key: key, Name: key, Root: root, Editable: true}
+	return Field{Key: key, Name: key, Root: root, Kind: Input}
 }
 
-func button(root uintptr) Field { return Field{Name: "button", Root: root} }
+func button(root uintptr) Field { return Field{Name: "button", Root: root, Kind: NotField} }
 
-func expect(t *testing.T, what string, got, want HKL) {
+func expect(t *testing.T, what string, got, want kbd.HKL) {
 	t.Helper()
 	if got != want {
 		t.Fatalf("%s: got %s, want %s", what, got, want)

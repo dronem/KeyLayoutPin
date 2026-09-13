@@ -47,10 +47,6 @@ type accInfo struct {
 	Editable bool
 }
 
-func coInitialize() {
-	procCoInitializeEx.Call(0, coinitApartmentThreaded)
-}
-
 func coInitializeMTA() uintptr {
 	hr, _, _ := procCoInitializeEx.Call(0, coinitMultithreaded)
 	return hr

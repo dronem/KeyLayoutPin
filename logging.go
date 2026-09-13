@@ -3,11 +3,120 @@
 package main
 
 import (
+	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
+
+// errLog receives errors: they go to the log file even without -log.
+// Logging is process-wide by nature, like the standard logger.
+var errLog = log.New(os.Stderr, "ERROR ", log.Ltime)
+
+func errorf(format string, args ...any) { errLog.Printf(format, args...) }
+
+// setupLogging sends informational messages to the console and, if full,
+// to the file; errors always go to both (file == "" means no file). The
+// returned func flushes and closes everything.
+func setupLogging(file string, full bool) func() {
+	log.SetFlags(log.Ltime)
+	infoOut, errOut := teeWriter{os.Stderr}, teeWriter{os.Stderr}
+	var f *rotatingFile
+	if file != "" {
+		var err error
+		if f, err = openRotating(file, maxLogSize); err != nil {
+			fatalf("cannot open log: %v", err)
+		}
+		errOut = append(errOut, f)
+		if full {
+			infoOut = append(infoOut, f)
+		}
+	}
+	infoW, errW := newAsyncWriter(infoOut), newAsyncWriter(errOut)
+	log.SetOutput(infoW)
+	errLog.SetOutput(errW)
+	return func() {
+		infoW.Close()
+		errW.Close()
+		if f != nil {
+			f.Close()
+		}
+	}
+}
+
+// asyncWriter writes the log in the background. Console writes block while
+// text is selected in the console (QuickEdit) — that must not stall the app.
+type asyncWriter struct {
+	ch   chan []byte
+	done chan struct{}
+}
+
+func newAsyncWriter(w io.Writer) *asyncWriter {
+	a := &asyncWriter{ch: make(chan []byte, 256), done: make(chan struct{})}
+	go func() {
+		for b := range a.ch {
+			w.Write(b)
+		}
+		close(a.done)
+	}()
+	return a
+}
+
+func (a *asyncWriter) Write(p []byte) (int, error) {
+	select {
+	case a.ch <- append([]byte(nil), p...):
+	default: // queue is full — drop the log line rather than block
+	}
+	return len(p), nil
+}
+
+// Close flushes the queued lines; the writer must not be used afterwards.
+func (a *asyncWriter) Close() {
+	close(a.ch)
+	select {
+	case <-a.done:
+	case <-time.After(time.Second):
+	}
+}
+
+// teeWriter writes to every destination regardless of errors. Unlike
+// io.MultiWriter it doesn't stop at the first failure: a GUI build has no
+// valid stderr, and that must not prevent writing the log file.
+type teeWriter []io.Writer
+
+func (t teeWriter) Write(p []byte) (int, error) {
+	for _, w := range t {
+		w.Write(p)
+	}
+	return len(p), nil
+}
+
+var procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+
+// exitHooks run on fatalf, which exits without running deferred calls.
+var exitHooks []func()
+
+func atExit(f func()) { exitHooks = append(exitHooks, f) }
+
+// fatalf reports a startup error and exits. The GUI build has no console,
+// so there the error is also shown in a message box instead of vanishing.
+func fatalf(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	errorf("%s", msg) // console and, once set up, the log file
+	for i := len(exitHooks) - 1; i >= 0; i-- {
+		exitHooks[i]()
+	}
+	if c, _, _ := procGetConsoleWindow.Call(); c == 0 {
+		messageBox("change_lang cannot start:\n\n" + msg)
+	} else {
+		time.Sleep(100 * time.Millisecond) // let the async log writers flush
+	}
+	os.Exit(1)
+}
 
 // maxLogSize keeps the log from growing forever and piling up history.
 const maxLogSize = 1 << 20

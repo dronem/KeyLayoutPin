@@ -4,29 +4,34 @@ package main
 
 import (
 	"fmt"
-	"syscall"
+	"log"
+	"runtime"
 	"time"
-	"unsafe"
 )
 
-// probe prints once a second what Windows sees in focus: window, control,
-// the MSAA chain to the focused element, and the layout. For diagnostics.
-func probe(d time.Duration) {
-	coInitialize()
+// Diagnostic modes. Their output contains field labels and window titles.
+
+// runProbe prints once a second what Windows sees in focus: window,
+// control, the MSAA chain to the focused element, and the layout.
+func runProbe(d time.Duration, wake bool) {
+	runtime.LockOSThread()
+	coInitializeMTA()
 	defer coUninitialize()
+	det := newDetector(wake, false)
 	var prev string
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(time.Second) {
 		fg := getForegroundWindow()
 		tid, pid := windowThreadProcess(fg)
-		if root := rootWindow(fg); isChromium(className(root)) {
-			wakeOnce(root)
+		root := rootWindow(fg)
+		if wake && isChromium(className(root)) {
+			det.wakeOnce(root)
 		}
 		fw := focusWindow(tid)
 		if fw == 0 {
 			fw = fg
 		}
-		line := fmt.Sprintf("%s | window %s | control %s | layout %s\n", processName(pid), className(fg), className(fw), keyboardLayout(tid).Display())
-		if _, path, ok := focusedInWindow(rootWindow(fg)); ok {
+		line := fmt.Sprintf("%s | window %s | control %s | layout %s\n", processName(pid), className(fg), className(fw), layoutName(keyboardLayout(tid)))
+		if _, path, ok := focusedInWindow(root); ok {
 			for i, p := range path {
 				line += fmt.Sprintf("    %*s%s %q editable=%v\n", i*2, "", roleName(p.Role), p.Name, p.Editable)
 			}
@@ -40,91 +45,62 @@ func probe(d time.Duration) {
 	}
 }
 
-// watchEv is state for -watch mode: observe and log only, never switch.
-var watchEv struct {
-	hwnd       uintptr
-	obj, child int32
-	queued     bool
-	thread     uint32
+// observer is the -watch sink: it logs every focus event in detail and
+// every layout change, and never switches anything. It runs on the same
+// tracker as the normal mode, so it shows exactly what the engine would get.
+type observer struct {
+	keys       *hotkeys
 	lastLayout HKL
-	lastFgApp  string
-	out        func(string, ...any)
+	lastApp    string
 }
 
-func watchProc(hook, event, hwnd, idObject, idChild, idThread, eventTime uintptr) uintptr {
-	if hwnd == 0 {
-		return 0
-	}
-	watchEv.hwnd, watchEv.obj, watchEv.child = hwnd, int32(idObject), int32(idChild)
-	if !watchEv.queued {
-		watchEv.queued = true
-		procPostThreadMessageW.Call(uintptr(watchEv.thread), wmFocusChanged, 0, 0)
-	}
-	return 0
-}
-
-func watchFocus() {
-	watchEv.queued = false
-	hwnd, obj, child := watchEv.hwnd, watchEv.obj, watchEv.child
-	tid, pid := windowThreadProcess(hwnd)
-	root := rootWindow(hwnd)
-	if isChromium(className(root)) {
-		wakeOnce(root)
-	}
-	ev, evOK := accessibleFromEvent(hwnd, obj, child)
-	leaf, _, leafOK := focusedInWindow(root)
-	f, _ := describeFocus(hwnd, obj, child)
-	watchEv.out("FOCUS %s hwnd=%s obj=%d child=%d layout=%s\n"+
+func (w *observer) Focus(f focus) {
+	log.Printf("FOCUS %s hwnd=%s obj=%d child=%d layout=%s\n"+
 		"    event:   ok=%v %s %q editable=%v\n"+
 		"    walk:    ok=%v %s %q editable=%v\n"+
-		"    result:  field=%v key=%s",
-		processName(pid), className(hwnd), obj, child, keyboardLayout(tid).Display(),
-		evOK, roleName(ev.Role), ev.Name, ev.Editable,
-		leafOK, roleName(leaf.Role), leaf.Name, leaf.Editable,
-		f.Editable, f.Key)
+		"    result:  %s key=%s",
+		f.field.App, className(f.ev.hwnd), f.ev.obj, f.ev.child, layoutName(keyboardLayout(f.field.Tid)),
+		f.eventOK, roleName(f.event.Role), f.event.Name, f.event.Editable,
+		f.walkOK, roleName(f.walk.Role), f.walk.Name, f.walk.Editable,
+		f.field.Kind, f.field.Key)
 }
 
-func watchTick() {
+func (w *observer) Tick() {
 	fg := getForegroundWindow()
 	tid, pid := windowThreadProcess(fg)
-	h := keyboardLayout(tid)
-	app := processName(pid)
-	if h != watchEv.lastLayout || app != watchEv.lastFgApp {
-		hot := time.Since(lastHotkeyTime()) < hotkeyWindow
-		watchEv.out("LAYOUT %s in %s (after hotkey: %v)", h.Display(), app, hot)
-		watchEv.lastLayout, watchEv.lastFgApp = h, app
+	h, app := keyboardLayout(tid), processName(pid)
+	if h != w.lastLayout || app != w.lastApp {
+		hot := time.Since(w.keys.Last()) < hotkeyWindow
+		log.Printf("LAYOUT %s in %s (after hotkey: %v)", layoutName(h), app, hot)
+		w.lastLayout, w.lastApp = h, app
 	}
 }
 
-// watch is the observation mode: logs every focus event in detail
-// and every layout change. It never switches anything.
-func watch(d time.Duration, out func(string, ...any)) {
-	watchEv.out = out
-	watchEv.thread = getCurrentThreadID()
-	coInitialize()
-	defer coUninitialize()
-	if err := startHotkeyWatcher(); err != nil {
-		out("keyboard hook: %v", err)
+// hotkeyWindow mirrors the engine's rule for the -watch output.
+const hotkeyWindow = 1500 * time.Millisecond
+
+// runWatch is the observation mode.
+func runWatch(d time.Duration, wake bool) {
+	runtime.LockOSThread()
+	keys, err := startHotkeys()
+	if err != nil {
+		fatalf("keyboard hook: %v", err)
 	}
-	hook, _, _ := procSetWinEventHook.Call(eventObjectFocus, eventObjectFocus, 0,
-		syscall.NewCallback(watchProc), 0, 0, wineventOutOfContext|wineventSkipOwnProcess)
-	defer procUnhookWinEvent.Call(hook)
-	timer, _, _ := procSetTimer.Call(0, 0, 100, 0)
-	defer procKillTimer.Call(0, timer)
-	end := time.Now().Add(d)
-	var m msg
-	for time.Now().Before(end) {
-		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
-		if int32(r) <= 0 {
-			break
-		}
-		switch {
-		case m.Hwnd == 0 && m.Message == wmFocusChanged:
-			watchFocus()
-		case m.Hwnd == 0 && m.Message == wmTimer:
-			watchTick()
-		default:
-			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
-		}
+	win, err := newMsgWindow()
+	if err != nil {
+		fatalf("window: %v", err)
 	}
+	defer win.close()
+	t := newTracker(&observer{keys: keys}, win, newDetector(wake, true).describe)
+	unhook, err := t.hookFocus()
+	if err != nil {
+		fatalf("SetWinEventHook: %v", err)
+	}
+	defer unhook()
+	if err := win.every(1, 100*time.Millisecond, t.tick); err != nil {
+		fatalf("SetTimer: %v", err)
+	}
+	time.AfterFunc(d, func() { win.post(wmClose) })
+	quitOnSignal()
+	messageLoop()
 }

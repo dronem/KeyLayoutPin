@@ -75,7 +75,7 @@ Only one copy runs at a time: a second start just shows a message and exits.
 3. On entering a field: if there is an entry for it, `WM_INPUTLANGCHANGEREQUEST` is sent
    to the focused window. Otherwise the default layout is applied.
 4. A timer (every 100 ms) watches the foreground window's layout. Every change is one
-   of three kinds ([engine.go](engine.go)):
+   of three kinds ([internal/engine](internal/engine/engine.go)):
    - **ours**: the app requested it. If the request was for the previous field and
      landed in the new one, the right layout is re-applied;
    - **the user's**: within 1.5 s after Ctrl+Shift / Alt+Shift / Win+Space / `
@@ -87,12 +87,27 @@ Only one copy runs at a time: a second start just shows a message and exits.
 5. On leaving a field, the layout it had is remembered. So on return you get "the one
    from last time", even if Ctrl+Shift was never pressed in that field.
 
-Fields are resolved on a separate thread ([resolver.go](resolver.go)). If an app hangs
+Fields are resolved on a separate thread ([tracker.go](tracker.go), [resolver.go](resolver.go)). If an app hangs
 and doesn't answer MSAA calls for more than 2 seconds, the thread is abandoned and a new
 one is started, while layout switching keeps working. The log is written in the
 background: selecting text in the console window (QuickEdit) doesn't stall the app.
 
-The logic is covered by tests: `go test .`
+The logic is covered by tests: `go test ./...`
+
+### Code layout
+
+| | |
+|---|---|
+| [internal/engine](internal/engine/engine.go) | when to switch and what to remember — no Windows dependencies |
+| [internal/store](internal/store/store.go) | the memory file (hashing, migration, size cap) — no Windows dependencies |
+| [internal/kbd](internal/kbd/kbd.go) | the keyboard layout handle type |
+| [field.go](field.go) | what has focus: MSAA calls in `detector`, the decisions in pure `classify` |
+| [tracker.go](tracker.go), [resolver.go](resolver.go) | focus events → resolver threads (with the hung-app watchdog) → engine |
+| [window.go](window.go), [tray.go](tray.go) | the hidden message window and the tray icon |
+| [hotkey.go](hotkey.go), [autostart.go](autostart.go) | the keyboard hook, the Run key |
+| [flags.go](flags.go), [logging.go](logging.go), [paths.go](paths.go) | command line, log, path expansion |
+| [probe.go](probe.go) | `-probe` and `-watch` (the same tracker with an observer instead of the engine) |
+| [main.go](main.go) | wiring |
 
 No external dependencies — only the Go standard library and WinAPI.
 

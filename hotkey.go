@@ -43,9 +43,14 @@ type kbdLLHookStruct struct {
 	ExtraInfo uintptr
 }
 
-var lastHotkey atomic.Int64 // UnixNano of the last hotkey press
+// hotkeys watches for layout switch hotkeys with a low-level keyboard hook.
+type hotkeys struct {
+	last atomic.Int64 // UnixNano of the last hotkey press
+	proc uintptr      // the hook procedure, created once
+}
 
-func lastHotkeyTime() time.Time { return time.Unix(0, lastHotkey.Load()) }
+// Last is when a layout switch hotkey was last pressed. Safe from any thread.
+func (k *hotkeys) Last() time.Time { return time.Unix(0, k.last.Load()) }
 
 func keyDown(vk uintptr) bool {
 	r, _, _ := procGetAsyncKeyState.Call(vk)
@@ -61,26 +66,35 @@ func isAny(vk uint32, keys ...uint32) bool {
 	return false
 }
 
-func keyboardProc(nCode, wParam, lParam uintptr) uintptr {
+// isLayoutHotkey decides whether a key event is part of a layout switch
+// hotkey: Ctrl+Shift or Alt+Shift (on press and on release — Windows
+// switches on release), Win+Space, or ` alone (if configured in Windows).
+// shift/ctrl/alt include the key itself.
+func isLayoutHotkey(vk uint32, down, shift, ctrl, alt, win bool) bool {
+	switch {
+	case shift && (ctrl || alt) && isAny(vk, vkShift, vkLShift, vkRShift, vkCtrl, vkLCtrl, vkRCtrl, vkAlt, vkLAlt, vkRAlt):
+		return true
+	case vk == vkSpace && win && down:
+		return true
+	case vk == vkGrave && down && !shift && !ctrl && !alt:
+		return true
+	}
+	return false
+}
+
+func (k *hotkeys) keyboardProc(nCode, wParam, lParam uintptr) uintptr {
 	if int32(nCode) >= 0 {
-		k := (*kbdLLHookStruct)(unsafe.Pointer(lParam))
-		down := wParam == wmKeyDown || wParam == wmSysKeyDown
-		vk := k.VkCode
+		ev := (*kbdLLHookStruct)(unsafe.Pointer(lParam))
+		vk := ev.VkCode
 		// GetAsyncKeyState does not reflect the current key yet,
-		// so it is taken into account separately (on both press and release:
-		// Windows switches the layout on release).
+		// so it is taken into account separately.
 		shift := isAny(vk, vkShift, vkLShift, vkRShift) || keyDown(vkShift)
 		ctrl := isAny(vk, vkCtrl, vkLCtrl, vkRCtrl) || keyDown(vkCtrl)
 		alt := isAny(vk, vkAlt, vkLAlt, vkRAlt) || keyDown(vkAlt)
 		win := keyDown(vkLWin) || keyDown(vkRWin)
-
-		switch {
-		case shift && (ctrl || alt) && isAny(vk, vkShift, vkLShift, vkRShift, vkCtrl, vkLCtrl, vkRCtrl, vkAlt, vkLAlt, vkRAlt):
-			lastHotkey.Store(time.Now().UnixNano()) // Ctrl+Shift, Alt+Shift
-		case vk == vkSpace && win && down:
-			lastHotkey.Store(time.Now().UnixNano()) // Win+Space
-		case vk == vkGrave && down && !shift && !ctrl && !alt:
-			lastHotkey.Store(time.Now().UnixNano()) // ` (if configured in Windows)
+		down := wParam == wmKeyDown || wParam == wmSysKeyDown
+		if isLayoutHotkey(vk, down, shift, ctrl, alt, win) {
+			k.last.Store(time.Now().UnixNano())
 		}
 	}
 	r, _, _ := procCallNextHookEx.Call(0, nCode, wParam, lParam)
@@ -92,23 +106,23 @@ func keyboardProc(nCode, wParam, lParam uintptr) uintptr {
 // Re-installing it periodically bounds how long hotkeys can go unnoticed.
 const hookRefresh = 5 * time.Minute
 
-var keyboardProcPtr = syscall.NewCallback(keyboardProc)
-
-func installKeyboardHook() (uintptr, error) {
+func (k *hotkeys) install() (uintptr, error) {
 	module, _, _ := procGetModuleHandleW.Call(0)
-	hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, keyboardProcPtr, module, 0)
+	hook, _, err := procSetWindowsHookExW.Call(whKeyboardLL, k.proc, module, 0)
 	if hook == 0 {
 		return 0, err
 	}
 	return hook, nil
 }
 
-// startHotkeyWatcher starts the keyboard hook thread.
-func startHotkeyWatcher() error {
+// startHotkeys starts the keyboard hook on its own thread.
+func startHotkeys() (*hotkeys, error) {
+	k := &hotkeys{}
+	k.proc = syscall.NewCallback(k.keyboardProc)
 	errc := make(chan error, 1)
 	go func() {
 		runtime.LockOSThread()
-		hook, err := installKeyboardHook()
+		hook, err := k.install()
 		if err != nil {
 			errc <- err
 			return
@@ -126,7 +140,7 @@ func startHotkeyWatcher() error {
 			}
 			if m.Hwnd == 0 && m.Message == wmTimer {
 				// Install the new hook first, so there is no gap.
-				if fresh, err := installKeyboardHook(); err == nil {
+				if fresh, err := k.install(); err == nil {
 					procUnhookWindowsHookEx.Call(hook)
 					hook = fresh
 				} else {
@@ -135,5 +149,5 @@ func startHotkeyWatcher() error {
 			}
 		}
 	}()
-	return <-errc
+	return k, <-errc
 }
