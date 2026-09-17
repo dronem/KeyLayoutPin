@@ -16,17 +16,19 @@ window. Any installed layouts and any number of them can be used.
 ## Build and run
 
 ```powershell
-go build -o change_lang.exe .
-.\change_lang.exe
-```
-
-Without a console window (for autostart); errors are logged to
-`%LOCALAPPDATA%\change_lang\log.txt` (add `-log` for the full log):
-
-```powershell
-go build -ldflags "-H=windowsgui" -o change_lang_bg.exe .
+.\build.ps1          # or .\build.ps1 -Test to run the tests first
 .\change_lang_bg.exe
 ```
+
+`build.ps1` builds two versions:
+
+- `change_lang_bg.exe` — without a console window (`-ldflags -H=windowsgui`), for everyday
+  use and autostart. Errors are logged to `%LOCALAPPDATA%\change_lang\log.txt`
+  (add `-log` for the full log);
+- `change_lang.exe` — console build for diagnostics: `-watch`, `-probe`, `-list`, `-v`.
+
+If scripts are blocked by the execution policy:
+`powershell -ExecutionPolicy Bypass -File build.ps1`.
 
 ## Tray and autostart
 
