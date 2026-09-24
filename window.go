@@ -62,7 +62,7 @@ func newMsgWindow() (*msgWindow, error) {
 	w := &msgWindow{handlers: map[uint32]func(uintptr, uintptr){}, timers: map[uintptr]func(){}}
 	module, _, _ := procGetModuleHandleW.Call(0)
 	// One class per window: the window procedure is a closure over w.
-	class, _ := syscall.UTF16PtrFromString("change_lang_" + strconv.Itoa(int(windowCount.Add(1))))
+	class, _ := syscall.UTF16PtrFromString("KeyLayoutPin_" + strconv.Itoa(int(windowCount.Add(1))))
 	wc := wndClassEx{
 		CbSize:    uint32(unsafe.Sizeof(wndClassEx{})),
 		WndProc:   syscall.NewCallback(w.wndProc),
@@ -144,14 +144,14 @@ func registerWindowMessage(name string) uint32 {
 
 func messageBox(text string) {
 	t, _ := syscall.UTF16PtrFromString(text)
-	c, _ := syscall.UTF16PtrFromString("change_lang")
+	c, _ := syscall.UTF16PtrFromString("KeyLayoutPin")
 	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), mbIconInformation)
 }
 
 // singleInstance returns false if another copy is already running.
 // The mutex lives as long as the process.
 func singleInstance() bool {
-	name, _ := syscall.UTF16PtrFromString(`Local\change_lang_single_instance`)
+	name, _ := syscall.UTF16PtrFromString(`Local\KeyLayoutPin_single_instance`)
 	h, _, err := procCreateMutexW.Call(0, 0, uintptr(unsafe.Pointer(name)))
 	return h != 0 && err != syscall.Errno(errorAlreadyExists)
 }

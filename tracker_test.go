@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"change_lang/internal/engine"
+	"keylayoutpin/internal/engine"
 )
 
 type fakeWorker struct {

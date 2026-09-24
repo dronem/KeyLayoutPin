@@ -5,7 +5,7 @@ package main
 import (
 	"testing"
 
-	"change_lang/internal/engine"
+	"keylayoutpin/internal/engine"
 )
 
 func TestNormalizeClass(t *testing.T) {

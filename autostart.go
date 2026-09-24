@@ -15,7 +15,7 @@ import (
 
 // Autostart via HKCU\...\Run. It is turned on automatically on the very
 // first run; after that only the tray menu changes it, so turning it off
-// sticks. The "first run already happened" flag lives in HKCU\Software\change_lang.
+// sticks. The "first run already happened" flag lives in HKCU\Software\KeyLayoutPin.
 
 var (
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
@@ -25,7 +25,6 @@ var (
 	procRegSetValueExW   = advapi32.NewProc("RegSetValueExW")
 	procRegQueryValueExW = advapi32.NewProc("RegQueryValueExW")
 	procRegDeleteValueW  = advapi32.NewProc("RegDeleteValueW")
-	procRegDeleteKeyW    = advapi32.NewProc("RegDeleteKeyW")
 	procRegCloseKey      = advapi32.NewProc("RegCloseKey")
 )
 
@@ -39,10 +38,8 @@ const (
 	keyWrite = 0x20006
 	regSz    = 1
 
-	runKey      = `Software\Microsoft\Windows\CurrentVersion\Run`
-	settingsKey = `Software\change_lang`
-	runValue    = "change_lang"
-	initValue   = "AutostartInitialized"
+	runKey    = `Software\Microsoft\Windows\CurrentVersion\Run`
+	initValue = "AutostartInitialized"
 )
 
 var errNotFound = errors.New("not found")
@@ -118,7 +115,7 @@ func regDeleteValue(path, name string) error {
 var persistentFlags = map[string]bool{"db": true, "default": true, "chromium": true, "interval": true, "log": true}
 
 const (
-	guiExeName        = "change_lang_bg.exe"
+	guiExeName        = "keylayoutpin_bg.exe"
 	subsystemGUI      = 2
 	peSignatureOffset = 0x3C
 )
@@ -147,7 +144,7 @@ func autostartArgs(fs *flag.FlagSet) []string {
 }
 
 // autostartExe picks the exe to start at login: this one if it is a GUI
-// build, otherwise change_lang_bg.exe next to it if that one is.
+// build, otherwise keylayoutpin_bg.exe next to it if that one is.
 func autostartExe() (string, error) {
 	self, err := os.Executable()
 	if err != nil {
@@ -201,34 +198,52 @@ func commandExe(cmd string) string {
 	return cmd
 }
 
-func autostartEnabled() bool {
-	_, err := regGetString(runKey, runValue)
+// autostartKeys are the registry places autostart lives in. The app uses
+// appKeys; tests use their own scratch keys.
+type autostartKeys struct {
+	run      string // the Run key
+	value    string // our value in it
+	settings string // our settings key ("first run happened" flag)
+}
+
+var appKeys = autostartKeys{
+	run:      runKey,
+	value:    "KeyLayoutPin",
+	settings: `Software\KeyLayoutPin`,
+}
+
+func autostartEnabled() bool     { return appKeys.enabled() }
+func setAutostart(on bool) error { return appKeys.set(on, autostartCommand) }
+func initAutostart() error       { return appKeys.init(autostartCommand) }
+
+func (k autostartKeys) enabled() bool {
+	_, err := regGetString(k.run, k.value)
 	return err == nil
 }
 
-func setAutostart(on bool) error {
+func (k autostartKeys) set(on bool, command func() (string, error)) error {
 	if !on {
-		return regDeleteValue(runKey, runValue)
+		return regDeleteValue(k.run, k.value)
 	}
-	cmd, err := autostartCommand()
+	cmd, err := command()
 	if err != nil {
 		return err
 	}
-	return regSetString(runKey, runValue, cmd)
+	return regSetString(k.run, k.value, cmd)
 }
 
-// initAutostart turns autostart on the first time the app runs, and fixes
-// the entry if the exe it points to no longer exists (the app was moved).
-func initAutostart() error {
-	if _, err := regGetString(settingsKey, initValue); err != nil {
-		if err := setAutostart(true); err != nil {
+// init turns autostart on the first time the app runs, and fixes the entry
+// if the exe it points to no longer exists (the app was moved).
+func (k autostartKeys) init(command func() (string, error)) error {
+	if _, err := regGetString(k.settings, initValue); err != nil {
+		if err := k.set(true, command); err != nil {
 			return err
 		}
-		return regSetString(settingsKey, initValue, "1")
+		return regSetString(k.settings, initValue, "1")
 	}
-	if cmd, err := regGetString(runKey, runValue); err == nil {
+	if cmd, err := regGetString(k.run, k.value); err == nil {
 		if _, err := os.Stat(commandExe(cmd)); err != nil {
-			return setAutostart(true)
+			return k.set(true, command)
 		}
 	}
 	return nil

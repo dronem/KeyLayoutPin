@@ -111,7 +111,7 @@ func fatalf(format string, args ...any) {
 		exitHooks[i]()
 	}
 	if c, _, _ := procGetConsoleWindow.Call(); c == 0 {
-		messageBox("change_lang cannot start:\n\n" + msg)
+		messageBox("KeyLayoutPin cannot start:\n\n" + msg)
 	} else {
 		time.Sleep(100 * time.Millisecond) // let the async log writers flush
 	}

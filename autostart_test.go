@@ -12,17 +12,17 @@ import (
 )
 
 // Uses its own scratch key — never touches the real Run key.
-const testKey = `Software\change_lang_test`
+const testKey = `Software\KeyLayoutPin_test`
 
 func TestRegistryRoundTrip(t *testing.T) {
 	t.Cleanup(func() {
 		p, _ := syscall.UTF16PtrFromString(testKey)
-		procRegDeleteKeyW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(p)))
+		procRegDeleteTreeW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(p)))
 	})
 	if _, err := regGetString(testKey, "v"); err == nil {
 		t.Fatal("value must not exist yet")
 	}
-	cmd := `"C:\Program Files\x\change_lang_bg.exe" -log "C:\a b\log.txt"`
+	cmd := `"C:\Program Files\x\keylayoutpin_bg.exe" -log "C:\a b\log.txt"`
 	if err := regSetString(testKey, "v", cmd); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestAutostartCommandQuotesPath(t *testing.T) {
 
 func TestSingleInstance(t *testing.T) {
 	if !singleInstance() {
-		t.Skip("change_lang is running — cannot test")
+		t.Skip("KeyLayoutPin is running — cannot test")
 	}
 	if singleInstance() {
 		t.Fatal("second instance must be refused")
@@ -99,5 +99,56 @@ func TestPESubsystem(t *testing.T) {
 	}
 	if _, err := peSubsystem("autostart.go"); err == nil {
 		t.Fatal("a non-PE file must be rejected")
+	}
+}
+
+var procRegDeleteTreeW = advapi32.NewProc("RegDeleteTreeW")
+
+// scratchKeys returns autostart locations under a test key, removed afterwards.
+func scratchKeys(t *testing.T) autostartKeys {
+	root := testKey + `\scratch`
+	t.Cleanup(func() {
+		p, _ := syscall.UTF16PtrFromString(testKey)
+		procRegDeleteTreeW.Call(hkeyCurrentUser, uintptr(unsafe.Pointer(p)))
+	})
+	return autostartKeys{
+		run:      root + `\Run`,
+		value:    "KeyLayoutPin",
+		settings: root + `\KeyLayoutPin`,
+	}
+}
+
+func cmdOf(exe string) func() (string, error) {
+	return func() (string, error) { return syscall.EscapeArg(exe), nil }
+}
+
+func TestAutostartFirstRunThenUserTurnsItOff(t *testing.T) {
+	k := scratchKeys(t)
+	self, _ := os.Executable()
+	if err := k.init(cmdOf(self)); err != nil {
+		t.Fatal(err)
+	}
+	if !k.enabled() {
+		t.Fatal("the first run must turn autostart on")
+	}
+	k.set(false, cmdOf(self)) // tray menu: Start with Windows → off
+	if err := k.init(cmdOf(self)); err != nil {
+		t.Fatal(err)
+	}
+	if k.enabled() {
+		t.Fatal("a later run must not turn autostart back on")
+	}
+}
+
+func TestAutostartFixesMovedExe(t *testing.T) {
+	k := scratchKeys(t)
+	self, _ := os.Executable()
+	regSetString(k.settings, initValue, "1")
+	regSetString(k.run, k.value, `C:\does\not\exist\keylayoutpin_bg.exe`)
+	if err := k.init(cmdOf(self)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := regGetString(k.run, k.value); commandExe(got) != self {
+		t.Fatalf("entry = %q; want it fixed to %s", got, self)
 	}
 }

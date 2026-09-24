@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"change_lang/internal/kbd"
+	"keylayoutpin/internal/kbd"
 )
 
 const (

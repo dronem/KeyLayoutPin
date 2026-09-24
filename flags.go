@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"change_lang/internal/store"
+	"keylayoutpin/internal/store"
 )
 
 // options are the command-line settings.

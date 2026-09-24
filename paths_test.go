@@ -47,7 +47,7 @@ func TestLogFlagForms(t *testing.T) {
 	}
 	for _, c := range cases {
 		flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-		os.Args = append([]string{"change_lang"}, c.args...)
+		os.Args = append([]string{"keylayoutpin"}, c.args...)
 		lf := &logFlag{path: defaultLogPath()}
 		flag.Var(lf, "log", "")
 		v := flag.Bool("v", false, "")

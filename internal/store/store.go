@@ -21,13 +21,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"change_lang/internal/kbd"
+	"keylayoutpin/internal/kbd"
 )
 
-const (
-	version    = 2
-	maxEntries = 1000
-)
+const maxEntries = 1000
 
 // entry is the remembered layout of a single field.
 type entry struct {
@@ -38,7 +35,6 @@ type entry struct {
 // Store holds the "field hash → layout" memory and persists it to disk.
 type Store struct {
 	path    string
-	Version int              `json:"version"`
 	Salt    string           `json:"salt"`
 	Seq     uint64           `json:"seq"`
 	Entries map[string]entry `json:"entries"`
@@ -46,12 +42,13 @@ type Store struct {
 
 // DataDir is the app's data folder under %LOCALAPPDATA%: unlike Roaming,
 // it is not synced to servers along with the user profile.
-func DataDir() string {
-	dir := os.Getenv("LOCALAPPDATA")
-	if dir == "" {
-		dir = "."
+func DataDir() string { return filepath.Join(localAppData(), "KeyLayoutPin") }
+
+func localAppData() string {
+	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
+		return dir
 	}
-	return filepath.Join(dir, "change_lang")
+	return "."
 }
 
 // DefaultPath is where the memory lives unless -db says otherwise.
@@ -59,52 +56,14 @@ func DefaultPath() string {
 	return filepath.Join(DataDir(), "layouts.json")
 }
 
-// legacyPath is where old versions kept the memory (in plain text).
-func legacyPath() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(dir, "change_lang", "layouts.json")
-}
-
-// legacyStore is the old format: field keys in plain text.
-type legacyStore struct {
-	Entries map[string]struct {
-		Layout string `json:"layout"`
-	} `json:"entries"`
-}
-
-// Open loads the memory at path. On the very first run at the default
-// path, the old plain-text memory is migrated and deleted.
+// Open loads the memory at path; a missing file means an empty memory.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, Version: version, Entries: map[string]entry{}}
+	s := &Store{path: path, Entries: map[string]entry{}}
 	data, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) && path == DefaultPath() {
-		if old := legacyPath(); old != "" {
-			if data, err = os.ReadFile(old); err == nil {
-				if err := s.migrate(data); err != nil {
-					return nil, err
-				}
-				os.Remove(old)
-				os.Remove(old + ".tmp")
-				return s, nil
-			}
-		}
-		err = nil
-		data = nil
-	}
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 	if len(data) > 0 {
-		var head struct{ Version int }
-		if err := json.Unmarshal(data, &head); err != nil {
-			return nil, err
-		}
-		if head.Version < version {
-			return s, s.migrate(data) // an old-format file passed via -db
-		}
 		if err := json.Unmarshal(data, s); err != nil {
 			return nil, err
 		}
@@ -118,24 +77,6 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	return s, nil
-}
-
-// migrate converts the old memory (plain-text keys) to hashes
-// and rewrites the file right away so no plain text is left behind.
-func (s *Store) migrate(data []byte) error {
-	var old legacyStore
-	if err := json.Unmarshal(data, &old); err != nil {
-		return err
-	}
-	if err := s.newSalt(); err != nil {
-		return err
-	}
-	for key, e := range old.Entries {
-		s.Seq++
-		s.Entries[s.hash(key)] = entry{Layout: e.Layout, Seq: s.Seq}
-	}
-	s.trim()
-	return s.save()
 }
 
 func (s *Store) newSalt() error {

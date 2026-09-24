@@ -1,3 +1,3 @@
-module change_lang
+module keylayoutpin
 
 go 1.26

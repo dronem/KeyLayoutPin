@@ -1,6 +1,6 @@
 //go:build windows
 
-// change_lang remembers the keyboard layout for each input field
+// KeyLayoutPin pins the keyboard layout to each input field
 // separately. Switch the command field to en and the comment field to ja,
 // and the layout comes back by itself when you return to either. Fields
 // where the layout was never switched get the default layout
@@ -24,19 +24,19 @@ import (
 	"syscall"
 	"time"
 
-	"change_lang/internal/engine"
-	"change_lang/internal/store"
+	"keylayoutpin/internal/engine"
+	"keylayoutpin/internal/store"
 )
 
 func main() {
 	o := parseOptions()
-	// Check this before touching any shared file (memory migration, log
-	// rotation): a second copy must leave everything as it is.
+	// Check this before touching any shared file (log rotation, memory):
+	// a second copy must leave everything as it is.
 	if (!o.diagnostic() || o.reset) && !singleInstance() {
 		if o.reset {
-			fatalf("change_lang is running — exit it first (tray icon → Exit), otherwise it rewrites the memory")
+			fatalf("KeyLayoutPin is running — exit it first (tray icon → Exit), otherwise it rewrites the memory")
 		}
-		messageBox("change_lang is already running — see the icon in the notification area.")
+		messageBox("KeyLayoutPin is already running — see the icon in the notification area.")
 		return
 	}
 	closeLog := setupLogging(o.logFile(), o.fullLog())

@@ -1,4 +1,4 @@
-# change_lang
+# KeyLayoutPin
 
 Pins the keyboard layout **to each input field separately**, in any Windows program.
 
@@ -17,15 +17,15 @@ window. Any installed layouts and any number of them can be used.
 
 ```powershell
 .\build.ps1          # or .\build.ps1 -Test to run the tests first
-.\change_lang_bg.exe
+.\keylayoutpin_bg.exe
 ```
 
 `build.ps1` builds two versions:
 
-- `change_lang_bg.exe` — without a console window (`-ldflags -H=windowsgui`), for everyday
-  use and autostart. Errors are logged to `%LOCALAPPDATA%\change_lang\log.txt`
+- `keylayoutpin_bg.exe` — without a console window (`-ldflags -H=windowsgui`), for everyday
+  use and autostart. Errors are logged to `%LOCALAPPDATA%\KeyLayoutPin\log.txt`
   (add `-log` for the full log);
-- `change_lang.exe` — console build for diagnostics: `-watch`, `-probe`, `-list`, `-v`.
+- `keylayoutpin.exe` — console build for diagnostics: `-watch`, `-probe`, `-list`, `-v`.
 
 If scripts are blocked by the execution policy:
 `powershell -ExecutionPolicy Bypass -File build.ps1`.
@@ -36,8 +36,8 @@ The app lives in the notification area (the blue "Aa" icon). Click it for the me
 
 - **Start with Windows** — checked when the app starts at login. On the very first run
   autostart is turned on automatically; uncheck it to turn it off, and it stays off.
-  The entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\change_lang`) starts
-  the GUI build — this exe if it is one, otherwise `change_lang_bg.exe` next to it — so
+  The entry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\KeyLayoutPin`) starts
+  the GUI build — this exe if it is one, otherwise `keylayoutpin_bg.exe` next to it — so
   no console window opens at login. Only persistent flags are kept (`-db`, `-default`,
   `-chromium`, `-interval`, `-log`); `-v` and diagnostic flags never get there.
 - **Exit**.
@@ -49,9 +49,9 @@ Only one copy runs at a time: a second start just shows a message and exits.
 | flag        | default                              | what it does |
 |-------------|--------------------------------------|--------------|
 | `-default`  | `system`                             | layout for new fields: `system` (from Windows settings), `keep` (leave as is) or a language (`en-US`, `ja`) |
-| `-db`       | `%LOCALAPPDATA%\change_lang\layouts.json` | where the memory is stored |
+| `-db`       | `%LOCALAPPDATA%\KeyLayoutPin\layouts.json` | where the memory is stored |
 | `-interval` | `100ms`                              | how often to check the current layout |
-| `-log`      | `%LOCALAPPDATA%\change_lang\log.txt` | log file. Without `-log` only errors (`ERROR …`) are written to the default file; with `-log` everything is: `-log` alone means the default file, `-log path` / `-log=path` another file. `-log=off` disables the file. `%VAR%` and `$env:VAR` are expanded, so the same command works from cmd, PowerShell and shortcuts. Diagnostic modes (`-watch`, `-probe`) write to a file only when `-log` is given explicitly |
+| `-log`      | `%LOCALAPPDATA%\KeyLayoutPin\log.txt` | log file. Without `-log` only errors (`ERROR …`) are written to the default file; with `-log` everything is: `-log` alone means the default file, `-log path` / `-log=path` another file. `-log=off` disables the file. `%VAR%` and `$env:VAR` are expanded, so the same command works from cmd, PowerShell and shortcuts. Diagnostic modes (`-watch`, `-probe`) write to a file only when `-log` is given explicitly |
 | `-chromium` | `true`                               | enable accessibility in Chrome/Edge/VS Code etc. (`-chromium=false` disables it, but then fields inside pages can't be told apart) |
 | `-v`        | —                                    | verbose log: every focus change with role and key |
 | `-list`     | —                                    | list installed layouts and exit |
@@ -101,7 +101,7 @@ The logic is covered by tests: `go test ./...`
 | | |
 |---|---|
 | [internal/engine](internal/engine/engine.go) | when to switch and what to remember — no Windows dependencies |
-| [internal/store](internal/store/store.go) | the memory file (hashing, migration, size cap) — no Windows dependencies |
+| [internal/store](internal/store/store.go) | the memory file (hashing, size cap) — no Windows dependencies |
 | [internal/kbd](internal/kbd/kbd.go) | the keyboard layout handle type |
 | [field.go](field.go) | what has focus: MSAA calls in `detector`, the decisions in pure `classify` |
 | [tracker.go](tracker.go), [resolver.go](resolver.go) | focus events → resolver threads (with the hung-app watchdog) → engine |
@@ -122,7 +122,7 @@ every keystroke. So here is what it stores and what it doesn't:
   layout switch hotkey is pressed (Ctrl/Alt+Shift, Win+Space, `) and records just the
   moment of the press ([hotkey.go](hotkey.go)). The app doesn't read what you type:
   it takes only a field's role and label, never its value.
-- **Memory** (`%LOCALAPPDATA%\change_lang\layouts.json`) holds only the salted SHA-256
+- **Memory** (`%LOCALAPPDATA%\KeyLayoutPin\layouts.json`) holds only the salted SHA-256
   of the field key and the layout. No field labels, app names or timestamps. The salt
   is random per installation. Hashing doesn't stop someone who has the file from testing
   a specific guess ("was there field X in app Y?"), but they can't list your fields.
@@ -135,8 +135,6 @@ every keystroke. So here is what it stores and what it doesn't:
   output includes field labels and window/page titles — that is personal data, enable it
   for diagnostics only. The log file (`-log`) is capped at 1 MB: on startup a large log
   is renamed to `.old` and the previous `.old` is deleted.
-- The old plain-text memory from `%APPDATA%` is converted to the new format on first
-  run, and the old file is deleted.
 - In Chrome/Electron the app enables accessibility. After that, page content is available
   via MSAA to other programs running as you as well (although any such program could
   enable it itself). If you don't want that, use `-chromium=false`.
@@ -145,7 +143,7 @@ every keystroke. So here is what it stores and what it doesn't:
 ## Limitations
 
 - Windows running **as administrator** don't accept messages from a normal process (UIPI).
-  To cover them, run `change_lang` as administrator.
+  To cover them, run KeyLayoutPin as administrator.
 - A field is identified by its name (label/placeholder). Fields with the same name in one
   window share one entry. If a field's name changes (e.g. "Message to John"), each variant
   gets its own memory.

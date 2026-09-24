@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"change_lang/internal/kbd"
+	"keylayoutpin/internal/kbd"
 )
 
 var (

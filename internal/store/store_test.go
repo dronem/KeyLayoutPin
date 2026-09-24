@@ -6,75 +6,70 @@ import (
 	"strings"
 	"testing"
 
-	"change_lang/internal/kbd"
+	"keylayoutpin/internal/kbd"
 )
-
-const legacyJSON = `{
-  "entries": {
-    "chrome.exe|Chrome_WidgetWin_1|Chrome_WidgetWin_1|42|Enter the code from Jane Doe": {
-      "layout": "0x04110411", "lang": "ja-JP", "app": "chrome.exe",
-      "field": "Enter the code from Jane Doe", "updated": "2026-10-11T20:42:00+02:00"
-    }
-  }
-}`
 
 const secretKey = "chrome.exe|Chrome_WidgetWin_1|Chrome_WidgetWin_1|42|Enter the code from Jane Doe"
 
-func noPlaintext(t *testing.T, path string) {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []string{"Jane Doe", "chrome", "updated", "2026"} {
-		if strings.Contains(string(data), s) {
-			t.Fatalf("file still contains %q:\n%s", s, data)
-		}
-	}
-}
-
-func TestMigrateFromRoaming(t *testing.T) {
-	roaming, local := t.TempDir(), t.TempDir()
-	t.Setenv("APPDATA", roaming)         // os.UserConfigDir on Windows
-	t.Setenv("XDG_CONFIG_HOME", roaming) // os.UserConfigDir elsewhere
-	t.Setenv("LOCALAPPDATA", local)
-	old := filepath.Join(roaming, "change_lang", "layouts.json")
-	os.MkdirAll(filepath.Dir(old), 0o700)
-	os.WriteFile(old, []byte(legacyJSON), 0o600)
-
-	s, err := Open(DefaultPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if h, ok := s.Get(secretKey); !ok || h != 0x04110411 {
-		t.Fatalf("entry lost after migration: %v %v", h, ok)
-	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Fatal("the old plain-text file must be deleted")
-	}
-	noPlaintext(t, DefaultPath())
-
-	// Reload — same salt, the entry is still there.
-	s2, err := Open(DefaultPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := s2.Get(secretKey); !ok {
-		t.Fatal("entry not found after reload")
-	}
-}
-
-func TestMigrateCustomPathInPlace(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "my.json")
-	os.WriteFile(path, []byte(legacyJSON), 0o600)
+func TestSetGetSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.json")
 	s, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.Get(secretKey); !ok {
-		t.Fatal("entry lost")
+	if _, ok := s.Get(secretKey); ok {
+		t.Fatal("a new memory must be empty")
 	}
-	noPlaintext(t, path)
+	if err := s.Set(secretKey, 0x04110411); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := Open(path) // same salt from the file
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := s2.Get(secretKey); !ok || h != 0x04110411 {
+		t.Fatalf("after reopen: %v %v", h, ok)
+	}
+	if err := s2.Forget(secretKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Get(secretKey); ok {
+		t.Fatal("Forget must remove the entry")
+	}
+}
+
+func TestFileHasNoPlainText(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.json")
+	s, _ := Open(path)
+	if err := s.Set(secretKey, 0x04110411); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"Jane Doe", "chrome", "Chrome_WidgetWin"} {
+		if strings.Contains(string(data), p) {
+			t.Fatalf("the file contains %q:\n%s", p, data)
+		}
+	}
+}
+
+func TestSaltDiffersPerFile(t *testing.T) {
+	a, _ := Open(filepath.Join(t.TempDir(), "a.json"))
+	b, _ := Open(filepath.Join(t.TempDir(), "b.json"))
+	if a.hash(secretKey) == b.hash(secretKey) {
+		t.Fatal("the same key must hash differently in different installations")
+	}
+}
+
+func TestBrokenFileIsAnError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.json")
+	os.WriteFile(path, []byte("{ not json"), 0o600)
+	if _, err := Open(path); err == nil {
+		t.Fatal("a broken file must not be silently replaced")
+	}
 }
 
 func TestTrimKeepsNewest(t *testing.T) {

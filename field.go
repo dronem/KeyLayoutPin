@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"change_lang/internal/engine"
+	"keylayoutpin/internal/engine"
 )
 
 // focus is what the detector found out about a focus event: the field,

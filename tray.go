@@ -105,7 +105,7 @@ func (t *tray) data() notifyIconData {
 		CallbackMessage: wmTrayCallback,
 		Icon:            t.icon,
 	}
-	copy(d.Tip[:len(d.Tip)-1], syscall.StringToUTF16("change_lang — keyboard layout per field"))
+	copy(d.Tip[:len(d.Tip)-1], syscall.StringToUTF16("KeyLayoutPin — keyboard layout pinned to each field"))
 	return d
 }
 
@@ -136,7 +136,7 @@ func appendMenu(menu uintptr, flags, id uintptr, text string) {
 func (t *tray) showMenu() {
 	menu, _, _ := procCreatePopupMenu.Call()
 	defer procDestroyMenu.Call(menu)
-	appendMenu(menu, mfString|mfGrayed, 0, "change_lang — keyboard layout per field")
+	appendMenu(menu, mfString|mfGrayed, 0, "KeyLayoutPin — keyboard layout pinned to each field")
 	appendMenu(menu, mfSeparator, 0, "")
 	auto := uintptr(mfString)
 	if autostartEnabled() {
