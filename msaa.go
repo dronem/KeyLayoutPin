@@ -56,6 +56,16 @@ func coUninitialize() {
 	procCoUninitialize.Call()
 }
 
+// comCall calls method number `method` of the COM object obj.
+//
+// Pointers to Go memory may be passed only as uintptr(unsafe.Pointer(p))
+// written directly in the argument list of the call: //go:uintptrescapes
+// then makes the compiler keep the object on the heap and alive until the
+// call returns. Converting earlier (into a variable, a slice, a helper's
+// result) leaves a bare number the GC knows nothing about: a stack object
+// can move when the goroutine stack grows, a heap object can be freed.
+//
+//go:uintptrescapes
 func comCall(obj uintptr, method int, args ...uintptr) uintptr {
 	vtbl := *(*uintptr)(unsafe.Pointer(obj))
 	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(method)*unsafe.Sizeof(uintptr(0))))
@@ -63,16 +73,16 @@ func comCall(obj uintptr, method int, args ...uintptr) uintptr {
 	return r
 }
 
-// variantArgs turns a by-value VARIANT into call arguments: on
-// x64/arm64 structs larger than 16 bytes are passed as a pointer to
-// a copy, on x86 directly on the stack.
-func variantArgs(v *variant) []uintptr {
+// accGet calls an IAccessible get_accXxx(VARIANT varChild, out) method.
+// varChild is passed by value: on x64/arm64 a VARIANT (24 bytes) goes as a
+// pointer to a copy, on x86 (16 bytes) as four words on the stack.
+func accGet(acc uintptr, method int, child *variant, out unsafe.Pointer) uintptr {
+	c := *child // the callee may treat the by-value argument as its own
 	if unsafe.Sizeof(uintptr(0)) == 8 {
-		c := *v
-		return []uintptr{uintptr(unsafe.Pointer(&c))}
+		return comCall(acc, method, uintptr(unsafe.Pointer(&c)), uintptr(out))
 	}
-	w := (*[4]uintptr)(unsafe.Pointer(v))
-	return w[:]
+	w := (*[4]uintptr)(unsafe.Pointer(&c))
+	return comCall(acc, method, w[0], w[1], w[2], w[3], uintptr(out))
 }
 
 func bstrToString(p uintptr) string {
@@ -133,18 +143,18 @@ const (
 func readInfo(acc uintptr, child *variant) accInfo {
 	var info accInfo
 	var name uintptr
-	if hr := comCall(acc, iaName, append(variantArgs(child), uintptr(unsafe.Pointer(&name)))...); int32(hr) >= 0 {
+	if hr := accGet(acc, iaName, child, unsafe.Pointer(&name)); int32(hr) >= 0 {
 		info.Name = bstrToString(name)
 	}
 	var role variant
-	if hr := comCall(acc, iaRole, append(variantArgs(child), uintptr(unsafe.Pointer(&role)))...); int32(hr) >= 0 {
+	if hr := accGet(acc, iaRole, child, unsafe.Pointer(&role)); int32(hr) >= 0 {
 		if role.VT == vtI4 {
 			info.Role = int32(role.Val)
 		}
 		procVariantClear.Call(uintptr(unsafe.Pointer(&role)))
 	}
 	var state variant
-	if hr := comCall(acc, iaState, append(variantArgs(child), uintptr(unsafe.Pointer(&state)))...); int32(hr) >= 0 {
+	if hr := accGet(acc, iaState, child, unsafe.Pointer(&state)); int32(hr) >= 0 {
 		if state.VT == vtI4 {
 			info.State = int32(state.Val)
 		}

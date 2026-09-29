@@ -125,12 +125,13 @@ func (t *tray) close() {
 }
 
 func appendMenu(menu uintptr, flags, id uintptr, text string) {
-	var p uintptr
-	if text != "" {
-		s, _ := syscall.UTF16PtrFromString(text)
-		p = uintptr(unsafe.Pointer(s))
+	if text == "" {
+		procAppendMenuW.Call(menu, flags, id, 0)
+		return
 	}
-	procAppendMenuW.Call(menu, flags, id, p)
+	s, _ := syscall.UTF16PtrFromString(text)
+	// The conversion must stay inside the call, see comCall.
+	procAppendMenuW.Call(menu, flags, id, uintptr(unsafe.Pointer(s)))
 }
 
 func (t *tray) showMenu() {
