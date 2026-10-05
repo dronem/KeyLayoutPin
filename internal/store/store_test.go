@@ -9,7 +9,7 @@ import (
 	"keylayoutpin/internal/kbd"
 )
 
-const secretKey = "chrome.exe|Chrome_WidgetWin_1|Chrome_WidgetWin_1|42|Enter the code from Jane Doe"
+const secretKey = "browser.exe|MainWindow|MainWindow|42|Enter the code from Jane Doe"
 
 func TestSetGetSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "m.json")
@@ -49,7 +49,7 @@ func TestFileHasNoPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"Jane Doe", "chrome", "Chrome_WidgetWin"} {
+	for _, p := range []string{"Jane Doe", "browser", "MainWindow"} {
 		if strings.Contains(string(data), p) {
 			t.Fatalf("the file contains %q:\n%s", p, data)
 		}

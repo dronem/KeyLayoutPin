@@ -133,8 +133,8 @@ func TestNewFieldGetsDefault(t *testing.T) {
 	}
 }
 
-// The request for field A lands when focus is already in field B.
-// It used to be remembered as the user's choice for B.
+// The request for field A lands when focus is already in field B:
+// it is ours, not the user's choice for B.
 func TestStaleRequestIsNotUserChoice(t *testing.T) {
 	sys, mem, e := setup(en)
 	mem["A"], mem["B"] = en, ja
@@ -271,8 +271,8 @@ func TestSwitchWhileFlyoutInFront(t *testing.T) {
 	expect(t, "memory A", mem["A"], ja)
 }
 
-// The reported scenario: the field has ja (Ctrl+Shift never pressed there),
-// set en in the terminal (another window), come back — ja again.
+// A field has ja (Ctrl+Shift was never pressed there); en is set in the
+// terminal (another window); back in the field it is ja again.
 func TestLeaveRemembersLayout(t *testing.T) {
 	sys, mem, e := setup(0) // leave new fields as is, so ja comes from outside
 	sys.layout = ja
