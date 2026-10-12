@@ -15,8 +15,11 @@ import (
 // control, the MSAA chain to the focused element, and the layout.
 func runProbe(d time.Duration, wake bool) {
 	runtime.LockOSThread()
-	coInitializeMTA()
-	defer coUninitialize()
+	doneCOM, err := initCOM()
+	if err != nil {
+		fatalf("%v", err)
+	}
+	defer doneCOM()
 	det := newDetector(wake, false)
 	var prev string
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(time.Second) {
@@ -24,7 +27,7 @@ func runProbe(d time.Duration, wake bool) {
 		tid, pid := windowThreadProcess(fg)
 		root := rootWindow(fg)
 		if wake && isChromium(className(root)) {
-			det.wakeOnce(root)
+			det.wakeOnce(root, pid)
 		}
 		fw := focusWindow(tid)
 		if fw == 0 {

@@ -68,15 +68,26 @@ func regGetString(path, name string) (string, error) {
 	}
 	defer procRegCloseKey.Call(h)
 	n, _ := syscall.UTF16PtrFromString(name)
-	buf := make([]uint16, 1024)
-	size := uint32(len(buf) * 2)
-	var typ uint32
-	r, _, _ := procRegQueryValueExW.Call(h, uintptr(unsafe.Pointer(n)), 0,
-		uintptr(unsafe.Pointer(&typ)), uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
-	if r != 0 {
+	// Ask for the size first, then read; retry if the value grew in between.
+	var size uint32
+	if r, _, _ := procRegQueryValueExW.Call(h, uintptr(unsafe.Pointer(n)), 0, 0, 0,
+		uintptr(unsafe.Pointer(&size))); r != 0 {
 		return "", errNotFound
 	}
-	return syscall.UTF16ToString(buf[:size/2]), nil
+	for {
+		buf := make([]uint16, size/2+1)
+		size = uint32(len(buf) * 2)
+		r, _, _ := procRegQueryValueExW.Call(h, uintptr(unsafe.Pointer(n)), 0, 0,
+			uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&size)))
+		switch syscall.Errno(r) {
+		case 0:
+			return syscall.UTF16ToString(buf[:size/2]), nil
+		case syscall.ERROR_MORE_DATA:
+			continue // size now holds the new length
+		default:
+			return "", errNotFound
+		}
+	}
 }
 
 func regSetString(path, name, value string) error {

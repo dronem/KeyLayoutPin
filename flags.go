@@ -3,11 +3,12 @@
 package main
 
 import (
+	"errors"
 	"flag"
-	"path/filepath"
+	"fmt"
+	"io"
+	"os"
 	"time"
-
-	"keylayoutpin/internal/store"
 )
 
 // options are the command-line settings.
@@ -21,6 +22,7 @@ type options struct {
 	reset    bool
 	watch    time.Duration
 	probe    time.Duration
+	version  bool
 	log      logFlag
 }
 
@@ -41,7 +43,7 @@ func (o *options) fullLog() bool { return flagSet("log") && o.logFile() != "" }
 
 func parseOptions() *options {
 	o := &options{log: logFlag{path: defaultLogPath()}}
-	flag.StringVar(&o.db, "db", store.DefaultPath(), "file with remembered layouts")
+	flag.StringVar(&o.db, "db", defaultStorePath(), "file with remembered layouts")
 	flag.StringVar(&o.def, "default", "system", "layout for new fields: system (from Windows settings), keep (leave as is) or a language, e.g. en-US")
 	flag.DurationVar(&o.interval, "interval", 100*time.Millisecond, "how often to check the current layout")
 	flag.BoolVar(&o.verbose, "v", false, "verbose log: field labels and window titles (personal data!)")
@@ -50,9 +52,13 @@ func parseOptions() *options {
 	flag.BoolVar(&o.reset, "reset", false, "forget all remembered layouts and exit")
 	flag.DurationVar(&o.watch, "watch", 0, "diagnostics: log focus events and layout changes without switching anything (e.g. 3m)")
 	flag.DurationVar(&o.probe, "probe", 0, "diagnostics: print what has focus for the given duration (e.g. 30s)")
+	flag.BoolVar(&o.version, "version", false, "print the version and exit")
 	flag.Var(&o.log, "log", "full log to a file (up to 1 MB, then log.old.txt); -log alone means the default file. Without -log only errors go to the default file; -log=off disables the file")
 	parseFlags(&o.log)
 
+	if err := o.validate(); err != nil {
+		fatalf("%v (see -h)", err)
+	}
 	if o.log.path != "off" {
 		resolvePathFlag("log")
 	}
@@ -60,9 +66,22 @@ func parseOptions() *options {
 	return o
 }
 
-// defaultLogPath is where the log goes unless -log says otherwise.
-func defaultLogPath() string {
-	return filepath.Join(store.DataDir(), "log.txt")
+// Bounds for -interval: Windows timers don't go below ~10 ms, and checking
+// less often than every few seconds would miss the user's switches.
+const (
+	minInterval = 10 * time.Millisecond
+	maxInterval = 5 * time.Second
+)
+
+// validate checks values the flag package accepts but the app can't use.
+func (o *options) validate() error {
+	if o.interval < minInterval || o.interval > maxInterval {
+		return fmt.Errorf("-interval %v is out of range %v to %v", o.interval, minInterval, maxInterval)
+	}
+	if o.watch < 0 || o.probe < 0 {
+		return fmt.Errorf("-watch and -probe need a positive duration")
+	}
+	return nil
 }
 
 // flagSet reports whether a flag was given on the command line.
@@ -106,15 +125,39 @@ func (l *logFlag) Set(v string) error {
 
 func (l *logFlag) IsBoolFlag() bool { return true }
 
-// parseFlags parses the command line, taking the argument after a bare
-// -log as its path: "-log C:\x\log.txt -v" works like "-log=C:\x\log.txt -v".
+// parseFlags parses the command line. Errors are reported with fatalf, not
+// by the flag package itself: it would print to stderr and exit, which the
+// GUI build (no console) does silently.
 func parseFlags(lf *logFlag) {
-	flag.Parse()
-	for lf.bare && flag.NArg() > 0 {
-		lf.path, lf.bare = flag.Arg(0), false
-		flag.CommandLine.Parse(flag.Args()[1:])
+	fs := flag.CommandLine
+	fs.Init(fs.Name(), flag.ContinueOnError)
+	fs.SetOutput(io.Discard) // errors are reported below, help is printed below
+	err := parseArgs(fs, lf, os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		fs.SetOutput(os.Stderr)
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", fs.Name())
+		fs.PrintDefaults()
+		os.Exit(0)
 	}
-	if flag.NArg() > 0 {
-		fatalf("unexpected arguments: %q (see -h)", flag.Args())
+	if err != nil {
+		fatalf("%v (see -h)", err)
 	}
+}
+
+// parseArgs parses args into fs, taking the argument after a bare -log as
+// its path: "-log C:\x\log.txt -v" works like "-log=C:\x\log.txt -v".
+func parseArgs(fs *flag.FlagSet, lf *logFlag, args []string) error {
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	for lf.bare && fs.NArg() > 0 {
+		lf.path, lf.bare = fs.Arg(0), false
+		if err := fs.Parse(fs.Args()[1:]); err != nil {
+			return err
+		}
+	}
+	if fs.NArg() > 0 {
+		return fmt.Errorf("unexpected arguments: %q", fs.Args())
+	}
+	return nil
 }

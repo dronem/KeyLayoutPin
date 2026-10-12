@@ -74,12 +74,13 @@ func startResolver(describe func(focusEvent) focus, box *inbox, stuck *atomic.In
 	r := &resolver{reqs: make(chan resolveReq, 1), stuck: stuck}
 	go func() {
 		runtime.LockOSThread()
-		// MTA rather than STA: an STA thread must keep pumping messages,
-		// while this one waits on a Go channel between requests.
-		if hr := coInitializeMTA(); int32(hr) < 0 {
-			errorf("COM init failed: 0x%08X", uint32(hr))
+		// MTA: this thread waits on a Go channel between requests and
+		// doesn't pump messages, which an STA thread would have to do.
+		doneCOM, err := initCOM()
+		if err != nil {
+			errorf("%v", err)
 		}
-		defer coUninitialize()
+		defer doneCOM()
 		defer func() {
 			if r.abandoned.Load() {
 				stuck.Add(-1)

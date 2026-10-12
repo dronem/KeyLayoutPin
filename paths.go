@@ -4,6 +4,7 @@ package main
 
 import (
 	"flag"
+	"os"
 	"path/filepath"
 	"regexp"
 	"syscall"
@@ -46,3 +47,19 @@ func resolvePathFlag(name string) {
 	}
 	f.Value.Set(p)
 }
+
+// dataDir is the app's data folder under %LOCALAPPDATA%: unlike Roaming,
+// it is not synced to servers along with the user profile.
+func dataDir() string {
+	dir := os.Getenv("LOCALAPPDATA")
+	if dir == "" {
+		dir = "."
+	}
+	return filepath.Join(dir, "KeyLayoutPin")
+}
+
+// defaultStorePath is where the memory lives unless -db says otherwise.
+func defaultStorePath() string { return filepath.Join(dataDir(), "layouts.json") }
+
+// defaultLogPath is where the log goes unless -log says otherwise.
+func defaultLogPath() string { return filepath.Join(dataDir(), "log.txt") }

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"keylayoutpin/internal/kbd"
+	"github.com/dronem/keylayoutpin/internal/kbd"
 )
 
 const (

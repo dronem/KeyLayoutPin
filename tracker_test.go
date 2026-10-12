@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"keylayoutpin/internal/engine"
+	"github.com/dronem/keylayoutpin/internal/engine"
 )
 
 type fakeWorker struct {
@@ -157,5 +157,22 @@ func TestTrackerStopsWhenTooManyStuck(t *testing.T) {
 	r.t.dispatch()
 	if len(r.worker().submitted) != 1 {
 		t.Fatal("requests must resume")
+	}
+}
+
+func TestTrackerForgetsExpiredHungApps(t *testing.T) {
+	r := newRig()
+	r.pids[1] = 100
+	r.t.onFocus(ev(1))
+	r.t.dispatch()
+	r.now = r.now.Add(resolveTimeout + time.Millisecond)
+	r.t.tick() // app 100 is marked hung
+	if len(r.t.hung) != 1 {
+		t.Fatalf("hung = %v", r.t.hung)
+	}
+	r.now = r.now.Add(hungSkip)
+	r.t.tick() // the app was closed meanwhile and never sends events again
+	if len(r.t.hung) != 0 {
+		t.Fatal("expired entries must be dropped even without new events")
 	}
 }

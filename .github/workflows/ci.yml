@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        shell: pwsh
+        run: |
+          $files = gofmt -l .
+          if ($files) { "Not gofmt-ed:"; $files; exit 1 }
+
+      # -unsafeptr=false: its only findings are reads of memory owned by
+      # Windows (hook structs, COM vtables, BSTRs), which is fine. Passing Go
+      # memory to syscalls is kept safe by //go:uintptrescapes (see msaa.go).
+      - name: go vet
+        run: go vet -unsafeptr=false ./...
+
+      - name: go test
+        run: go test -count=1 ./...
+
+      - name: build
+        shell: pwsh
+        run: ./build.ps1
+
+  # The engine, the store and the layout type have no Windows dependencies:
+  # keep it that way.
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./internal/...
+      - run: go test -count=1 ./internal/...

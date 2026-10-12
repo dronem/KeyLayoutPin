@@ -152,3 +152,18 @@ func TestAutostartFixesMovedExe(t *testing.T) {
 		t.Fatalf("entry = %q; want it fixed to %s", got, self)
 	}
 }
+
+func TestRegistryLongValue(t *testing.T) {
+	k := scratchKeys(t)
+	long := `"C:\very\long\path\keylayoutpin_bg.exe" -db=` + strings.Repeat("x", 5000)
+	if err := regSetString(k.run, k.value, long); err != nil {
+		t.Fatal(err)
+	}
+	got, err := regGetString(k.run, k.value)
+	if err != nil || got != long {
+		t.Fatalf("read %d chars, %v; want %d", len(got), err, len(long))
+	}
+	if !k.enabled() {
+		t.Fatal("a long autostart entry must still count as enabled")
+	}
+}

@@ -1,0 +1,46 @@
+name: Release
+
+# Push a tag to publish a release:
+#   git tag v1.0.0
+#   git push origin v1.0.0
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release and upload the files
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go vet -unsafeptr=false ./...
+          go test -count=1 ./...
+
+      - name: Build
+        shell: pwsh
+        run: ./build.ps1 -Version $env:GITHUB_REF_NAME.TrimStart('v')
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $zip = "KeyLayoutPin-$env:GITHUB_REF_NAME-windows-amd64.zip"
+          Compress-Archive -Path keylayoutpin_bg.exe, keylayoutpin.exe, README.md, LICENSE -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  $zip" | Out-File -Encoding ascii SHA256SUMS.txt
+          "ZIP=$zip" >> $env:GITHUB_ENV
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME $env:ZIP SHA256SUMS.txt `
+            --title "KeyLayoutPin $env:GITHUB_REF_NAME" --generate-notes

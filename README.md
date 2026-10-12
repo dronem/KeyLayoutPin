@@ -1,5 +1,7 @@
 # KeyLayoutPin
 
+[![CI](https://github.com/dronem/keylayoutpin/actions/workflows/ci.yml/badge.svg)](https://github.com/dronem/keylayoutpin/actions/workflows/ci.yml)
+
 Pins the keyboard layout **to each input field separately**, in any Windows program.
 
 Switch the layout (Ctrl+Shift / Alt+Shift / Win+Space) to English in a terminal and to
@@ -12,6 +14,18 @@ It works across Windows apps, not just one kind: classic desktop programs, brows
 more. Where an app tells Windows which field has focus, every field gets its own layout;
 where it doesn't (games, some custom-drawn apps), the layout is remembered for the whole
 window. Any installed layouts and any number of them can be used.
+
+## Install
+
+Download the zip from [Releases](https://github.com/dronem/keylayoutpin/releases),
+unpack it anywhere and run `keylayoutpin_bg.exe`. `SHA256SUMS.txt` next to the zip lets
+you check the download: `Get-FileHash KeyLayoutPin-*.zip`.
+
+Or with Go installed:
+
+```powershell
+go install -ldflags=-H=windowsgui github.com/dronem/keylayoutpin@latest
+```
 
 ## Build and run
 
@@ -27,8 +41,14 @@ window. Any installed layouts and any number of them can be used.
   (add `-log` for the full log);
 - `keylayoutpin.exe` — console build for diagnostics: `-watch`, `-probe`, `-list`, `-v`.
 
+Both are built with `-trimpath`, so no local paths end up in the binaries. The version
+(`-version`, the first log line, the tray tooltip) is the git commit the build was made
+from, e.g. `431a020 (2026-10-12)`, with `-dirty` for uncommitted changes. A release build
+sets it explicitly: `.\build.ps1 -Version 1.0.0`.
+
 If scripts are blocked by the execution policy:
 `powershell -ExecutionPolicy Bypass -File build.ps1`.
+
 
 ## Tray and autostart
 
@@ -50,7 +70,7 @@ Only one copy runs at a time: a second start just shows a message and exits.
 |-------------|--------------------------------------|--------------|
 | `-default`  | `system`                             | layout for new fields: `system` (from Windows settings), `keep` (leave as is) or a language (`en-US`, `ja`) |
 | `-db`       | `%LOCALAPPDATA%\KeyLayoutPin\layouts.json` | where the memory is stored |
-| `-interval` | `100ms`                              | how often to check the current layout |
+| `-interval` | `100ms`                              | how often to check the current layout (10ms to 5s) |
 | `-log`      | `%LOCALAPPDATA%\KeyLayoutPin\log.txt` | log file. Without `-log` only errors (`ERROR …`) are written to the default file; with `-log` everything is: `-log` alone means the default file, `-log path` / `-log=path` another file. `-log=off` disables the file. `%VAR%` and `$env:VAR` are expanded, so the same command works from cmd, PowerShell and shortcuts. Diagnostic modes (`-watch`, `-probe`) write to a file only when `-log` is given explicitly |
 | `-chromium` | `true`                               | enable accessibility in Chrome/Edge/VS Code etc. (`-chromium=false` disables it, but then fields inside pages can't be told apart) |
 | `-v`        | —                                    | verbose log: every focus change with role and key |
@@ -58,6 +78,10 @@ Only one copy runs at a time: a second start just shows a message and exits.
 | `-reset`    | —                                    | forget everything and exit (refuses while the app is running, since it would write the memory back) |
 | `-watch`    | —                                    | diagnostics: e.g. `-watch 3m` logs every focus event and layout change without switching anything |
 | `-probe`    | —                                    | diagnostics: e.g. `-probe 30s` prints what has focus once a second |
+| `-version`  | —                                    | print the version and exit |
+
+A wrong flag stops the app with a message — on stderr, and in a message box for the
+GUI build, which has no console.
 
 ## How it works
 
@@ -155,3 +179,7 @@ every keystroke. So here is what it stores and what it doesn't:
 - Console windows (conhost, Windows Terminal) report the layout unreliably.
 - Chrome/Electron turn on accessibility on the first MSAA access, so the first event in such
   a window may be recognized as the "window" rather than a specific field.
+
+## License
+
+[MIT](LICENSE)

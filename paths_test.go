@@ -4,9 +4,11 @@ package main
 
 import (
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExpandPath(t *testing.T) {
@@ -28,9 +30,6 @@ func TestExpandPath(t *testing.T) {
 }
 
 func TestLogFlagForms(t *testing.T) {
-	oldArgs, oldSet := os.Args, flag.CommandLine
-	t.Cleanup(func() { os.Args, flag.CommandLine = oldArgs, oldSet })
-
 	cases := []struct {
 		args    []string
 		path    string
@@ -46,14 +45,49 @@ func TestLogFlagForms(t *testing.T) {
 		{nil, defaultLogPath(), false},
 	}
 	for _, c := range cases {
-		flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
-		os.Args = append([]string{"keylayoutpin"}, c.args...)
-		lf := &logFlag{path: defaultLogPath()}
-		flag.Var(lf, "log", "")
-		v := flag.Bool("v", false, "")
-		parseFlags(lf)
+		fs, lf, v := testFlags()
+		if err := parseArgs(fs, lf, c.args); err != nil {
+			t.Errorf("%q: %v", c.args, err)
+			continue
+		}
 		if lf.path != c.path || *v != c.verbose {
 			t.Errorf("%q: path=%q v=%v, want path=%q v=%v", c.args, lf.path, *v, c.path, c.verbose)
+		}
+	}
+}
+
+func TestBadArgsAreErrors(t *testing.T) {
+	for _, args := range [][]string{{"-nosuchflag"}, {"-v", "stray"}, {"-v=maybe"}} {
+		fs, lf, _ := testFlags()
+		if err := parseArgs(fs, lf, args); err == nil {
+			t.Errorf("%q must be an error", args)
+		}
+	}
+}
+
+func testFlags() (*flag.FlagSet, *logFlag, *bool) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	lf := &logFlag{path: defaultLogPath()}
+	fs.Var(lf, "log", "")
+	return fs, lf, fs.Bool("v", false, "")
+}
+
+func TestValidateInterval(t *testing.T) {
+	for _, c := range []struct {
+		interval time.Duration
+		ok       bool
+	}{
+		{100 * time.Millisecond, true},
+		{minInterval, true},
+		{maxInterval, true},
+		{0, false},
+		{-time.Second, false},
+		{time.Minute, false},
+	} {
+		o := &options{interval: c.interval}
+		if err := o.validate(); (err == nil) != c.ok {
+			t.Errorf("-interval %v: err=%v, want ok=%v", c.interval, err, c.ok)
 		}
 	}
 }

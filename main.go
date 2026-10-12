@@ -24,19 +24,27 @@ import (
 	"syscall"
 	"time"
 
-	"keylayoutpin/internal/engine"
-	"keylayoutpin/internal/store"
+	"github.com/dronem/keylayoutpin/internal/engine"
+	"github.com/dronem/keylayoutpin/internal/store"
 )
 
 func main() {
 	o := parseOptions()
+	if o.version {
+		if guiBuild() {
+			messageBox("KeyLayoutPin " + versionString())
+		} else {
+			fmt.Println("KeyLayoutPin", versionString())
+		}
+		return
+	}
 	// Check this before touching any shared file (log rotation, memory):
 	// a second copy must leave everything as it is.
 	if (!o.diagnostic() || o.reset) && !singleInstance() {
 		if o.reset {
 			fatalf("KeyLayoutPin is running — exit it first (tray icon → Exit), otherwise it rewrites the memory")
 		}
-		messageBox("KeyLayoutPin is already running — see the icon in the notification area.")
+		notify("KeyLayoutPin is already running — see the icon in the notification area.")
 		return
 	}
 	closeLog := setupLogging(o.logFile(), o.fullLog())
@@ -108,7 +116,7 @@ func run(o *options) {
 	quitOnSignal()
 
 	printLayouts()
-	log.Printf("Running. Memory: %s (fields: %d). Ctrl+C to exit.", o.db, mem.Len())
+	log.Printf("KeyLayoutPin %s running. Memory: %s (fields: %d). Ctrl+C to exit.", versionString(), o.db, mem.Len())
 	messageLoop()
 	log.Println("Exiting.")
 }

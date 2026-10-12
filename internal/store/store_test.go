@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"keylayoutpin/internal/kbd"
+	"github.com/dronem/keylayoutpin/internal/kbd"
 )
 
 const secretKey = "browser.exe|MainWindow|MainWindow|42|Enter the code from Jane Doe"
@@ -78,19 +78,39 @@ func TestTrimKeepsNewest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < maxEntries+5; i++ {
-		s.Entries[s.hash(string(rune(i)))] = entry{Layout: "0x04110411", Seq: uint64(i + 1)}
+		s.entries[s.hash(string(rune(i)))] = entry{Layout: "0x04110411", Seq: uint64(i + 1)}
 	}
-	s.Seq = maxEntries + 5
+	s.seq = maxEntries + 5
 	if err := s.Set("newest", kbd.HKL(0x04090409)); err != nil {
 		t.Fatal(err)
 	}
-	if len(s.Entries) != maxEntries {
-		t.Fatalf("%d entries, want %d", len(s.Entries), maxEntries)
+	if len(s.entries) != maxEntries {
+		t.Fatalf("%d entries, want %d", len(s.entries), maxEntries)
 	}
 	if _, ok := s.Get("newest"); !ok {
 		t.Fatal("the newest entry was dropped")
 	}
-	if _, ok := s.Entries[s.hash(string(rune(0)))]; ok {
+	if _, ok := s.entries[s.hash(string(rune(0)))]; ok {
 		t.Fatal("the oldest entry should have been dropped")
+	}
+}
+
+// The file format is a contract with files already on disk.
+func TestReadsFileFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.json")
+	s, _ := Open(path)
+	key := s.hash(secretKey)
+	os.WriteFile(path, []byte(`{
+  "salt": "`+s.salt+`",
+  "seq": 7,
+  "entries": { "`+key+`": { "layout": "0x04110411", "seq": 7 } }
+}`), 0o600)
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h, ok := s2.Get(secretKey); !ok || h != 0x04110411 || s2.seq != 7 {
+		t.Fatalf("got %v %v, seq %d", h, ok, s2.seq)
 	}
 }

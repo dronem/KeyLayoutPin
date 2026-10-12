@@ -5,7 +5,7 @@ package main
 import (
 	"testing"
 
-	"keylayoutpin/internal/engine"
+	"github.com/dronem/keylayoutpin/internal/engine"
 )
 
 func TestNormalizeClass(t *testing.T) {
@@ -86,5 +86,38 @@ func TestIsLayoutHotkey(t *testing.T) {
 		if got := isLayoutHotkey(c.vk, c.down, c.shift, c.ctrl, c.alt, c.win); got != c.want {
 			t.Errorf("%s: got %v", c.name, got)
 		}
+	}
+}
+
+func TestWakeOnceHandlesReusedHWND(t *testing.T) {
+	var woken []uintptr
+	alive := map[uintptr]bool{}
+	d := newDetector(true, false)
+	d.wake = func(h uintptr) { woken = append(woken, h); alive[h] = true }
+	d.alive = func(h uintptr) bool { return alive[h] }
+
+	d.wakeOnce(0x10, 100)
+	d.wakeOnce(0x10, 100) // same window again
+	if len(woken) != 1 {
+		t.Fatalf("woken %d times, want 1", len(woken))
+	}
+	d.wakeOnce(0x10, 200) // the HWND was reused by another process's window
+	if len(woken) != 2 {
+		t.Fatal("a reused HWND of another process must be woken again")
+	}
+}
+
+func TestWakeOnceForgetsClosedWindows(t *testing.T) {
+	alive := map[uintptr]bool{}
+	d := newDetector(true, false)
+	d.wake = func(h uintptr) { alive[h] = true }
+	d.alive = func(h uintptr) bool { return alive[h] }
+
+	for h := uintptr(1); h <= 200; h++ {
+		d.wakeOnce(h, 1)
+		delete(alive, h) // the window closes right away
+	}
+	if n := len(d.woken); n > prunePeriod {
+		t.Fatalf("%d entries kept for closed windows, want at most %d", n, prunePeriod)
 	}
 }

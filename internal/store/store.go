@@ -21,7 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"keylayoutpin/internal/kbd"
+	"github.com/dronem/keylayoutpin/internal/kbd"
 )
 
 const maxEntries = 1000
@@ -32,46 +32,40 @@ type entry struct {
 	Seq    uint64 `json:"seq"`    // write order — used to drop old entries
 }
 
-// Store holds the "field hash → layout" memory and persists it to disk.
-type Store struct {
-	path    string
+// fileFormat is what is written to disk.
+type fileFormat struct {
 	Salt    string           `json:"salt"`
 	Seq     uint64           `json:"seq"`
-	Entries map[string]entry `json:"entries"`
+	Entries map[string]entry `json:"entries"` // field hash → entry
 }
 
-// DataDir is the app's data folder under %LOCALAPPDATA%: unlike Roaming,
-// it is not synced to servers along with the user profile.
-func DataDir() string { return filepath.Join(localAppData(), "KeyLayoutPin") }
-
-func localAppData() string {
-	if dir := os.Getenv("LOCALAPPDATA"); dir != "" {
-		return dir
-	}
-	return "."
-}
-
-// DefaultPath is where the memory lives unless -db says otherwise.
-func DefaultPath() string {
-	return filepath.Join(DataDir(), "layouts.json")
+// Store holds the "field hash → layout" memory and persists it to disk.
+// It is not safe for concurrent use.
+type Store struct {
+	path    string
+	salt    string
+	seq     uint64
+	entries map[string]entry
 }
 
 // Open loads the memory at path; a missing file means an empty memory.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, Entries: map[string]entry{}}
+	s := &Store{path: path, entries: map[string]entry{}}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 	if len(data) > 0 {
-		if err := json.Unmarshal(data, s); err != nil {
+		var f fileFormat
+		if err := json.Unmarshal(data, &f); err != nil {
 			return nil, err
 		}
-		if s.Entries == nil {
-			s.Entries = map[string]entry{}
+		s.salt, s.seq = f.Salt, f.Seq
+		if f.Entries != nil {
+			s.entries = f.Entries
 		}
 	}
-	if s.Salt == "" {
+	if s.salt == "" {
 		if err := s.newSalt(); err != nil {
 			return nil, err
 		}
@@ -84,21 +78,21 @@ func (s *Store) newSalt() error {
 	if _, err := rand.Read(b); err != nil {
 		return err
 	}
-	s.Salt = hex.EncodeToString(b)
+	s.salt = hex.EncodeToString(b)
 	return nil
 }
 
 func (s *Store) hash(key string) string {
-	sum := sha256.Sum256([]byte(s.Salt + "\x00" + key))
+	sum := sha256.Sum256([]byte(s.salt + "\x00" + key))
 	return hex.EncodeToString(sum[:16])
 }
 
 // Len is the number of remembered fields.
-func (s *Store) Len() int { return len(s.Entries) }
+func (s *Store) Len() int { return len(s.entries) }
 
 // Get returns the layout remembered for a field key.
 func (s *Store) Get(key string) (kbd.HKL, bool) {
-	e, ok := s.Entries[s.hash(key)]
+	e, ok := s.entries[s.hash(key)]
 	if !ok {
 		return 0, false
 	}
@@ -108,11 +102,11 @@ func (s *Store) Get(key string) (kbd.HKL, bool) {
 // Set remembers the layout of a field and saves the file.
 func (s *Store) Set(key string, layout kbd.HKL) error {
 	k := s.hash(key)
-	if old, ok := s.Entries[k]; ok && old.Layout == layout.String() {
+	if old, ok := s.entries[k]; ok && old.Layout == layout.String() {
 		return nil
 	}
-	s.Seq++
-	s.Entries[k] = entry{Layout: layout.String(), Seq: s.Seq}
+	s.seq++
+	s.entries[k] = entry{Layout: layout.String(), Seq: s.seq}
 	s.trim()
 	return s.save()
 }
@@ -120,24 +114,24 @@ func (s *Store) Set(key string, layout kbd.HKL) error {
 // Forget removes a field's entry and saves the file.
 func (s *Store) Forget(key string) error {
 	k := s.hash(key)
-	if _, ok := s.Entries[k]; !ok {
+	if _, ok := s.entries[k]; !ok {
 		return nil
 	}
-	delete(s.Entries, k)
+	delete(s.entries, k)
 	return s.save()
 }
 
 // trim drops the oldest entries beyond maxEntries.
 func (s *Store) trim() {
-	for len(s.Entries) > maxEntries {
+	for len(s.entries) > maxEntries {
 		var oldest string
-		var min uint64
-		for k, e := range s.Entries {
-			if oldest == "" || e.Seq < min {
-				oldest, min = k, e.Seq
+		var oldestSeq uint64
+		for k, e := range s.entries {
+			if oldest == "" || e.Seq < oldestSeq {
+				oldest, oldestSeq = k, e.Seq
 			}
 		}
-		delete(s.Entries, oldest)
+		delete(s.entries, oldest)
 	}
 }
 
@@ -147,7 +141,7 @@ func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	data, err := json.MarshalIndent(fileFormat{Salt: s.salt, Seq: s.seq, Entries: s.entries}, "", "  ")
 	if err != nil {
 		return err
 	}

@@ -145,5 +145,10 @@ func (t *tracker) tick() {
 		t.busy = false
 		t.dispatch() // a newer event may be waiting
 	}
+	for pid, until := range t.hung {
+		if !t.now().Before(until) {
+			delete(t.hung, pid) // also covers apps that were closed meanwhile
+		}
+	}
 	t.sink.Tick()
 }

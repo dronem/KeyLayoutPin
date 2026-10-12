@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"keylayoutpin/internal/engine"
+	"github.com/dronem/keylayoutpin/internal/engine"
 )
 
 // focus is what the detector found out about a focus event: the field,
@@ -26,25 +26,49 @@ type focus struct {
 // detector turns focus events into fields. It does the Windows/MSAA part;
 // the decisions are in the pure functions below (classify, normalizeClass).
 type detector struct {
-	wakeChromium bool // enable accessibility in Chromium/Electron windows
-	alwaysWalk   bool // diagnostics: always run the focus walk
+	wakeEnabled bool // enable accessibility in Chromium/Electron windows
+	alwaysWalk  bool // diagnostics: always run the focus walk
+
+	wake  func(root uintptr)      // wakes a Chromium window (wakeChromium)
+	alive func(hwnd uintptr) bool // the window still exists (IsWindow)
 
 	mu    sync.Mutex
-	woken map[uintptr]bool // Chromium windows already woken
+	woken map[uintptr]uint32 // Chromium windows already woken → their process
 }
 
-func newDetector(wakeChromium, alwaysWalk bool) *detector {
-	return &detector{wakeChromium: wakeChromium, alwaysWalk: alwaysWalk, woken: map[uintptr]bool{}}
+// prunePeriod: how many new windows to wake between sweeps of closed ones.
+const prunePeriod = 32
+
+func newDetector(wakeEnabled, alwaysWalk bool) *detector {
+	return &detector{
+		wakeEnabled: wakeEnabled,
+		alwaysWalk:  alwaysWalk,
+		wake:        wakeChromium,
+		alive:       isWindow,
+		woken:       map[uintptr]uint32{},
+	}
 }
 
-// wakeOnce wakes a Chromium window only once.
-func (d *detector) wakeOnce(root uintptr) {
+// wakeOnce wakes a Chromium window once. Windows reuses HWND values, so a
+// window is identified by its HWND and process together: a new window that
+// got the number of a closed one is woken again. Entries of closed windows
+// are dropped from time to time, so the map doesn't grow forever.
+func (d *detector) wakeOnce(root uintptr, pid uint32) {
 	d.mu.Lock()
-	done := d.woken[root]
-	d.woken[root] = true
+	done := d.woken[root] == pid
+	if !done {
+		if len(d.woken)%prunePeriod == prunePeriod-1 {
+			for h := range d.woken {
+				if !d.alive(h) {
+					delete(d.woken, h)
+				}
+			}
+		}
+		d.woken[root] = pid
+	}
 	d.mu.Unlock()
 	if !done {
-		wakeChromium(root)
+		d.wake(root)
 	}
 }
 
@@ -74,8 +98,8 @@ func (d *detector) describe(ev focusEvent) focus {
 		return r
 	}
 
-	if d.wakeChromium && isChromium(rootClass) {
-		d.wakeOnce(root)
+	if d.wakeEnabled && isChromium(rootClass) {
+		d.wakeOnce(root, pid)
 	}
 
 	info, ok := accessibleFromEvent(ev.hwnd, ev.obj, ev.child)

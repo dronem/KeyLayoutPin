@@ -95,25 +95,45 @@ func (t teeWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-var procGetConsoleWindow = kernel32.NewProc("GetConsoleWindow")
+// guiBuild reports whether this exe is the GUI build. Only that one shows
+// message boxes: it has no stderr anyone could read. The console build
+// always writes to stderr — it may run without a console window (scripts,
+// redirected output), where a modal box would just hang it.
+var guiBuild = sync.OnceValue(func() bool {
+	exe, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	s, _ := peSubsystem(exe)
+	return s == subsystemGUI
+})
+
+// notify tells the user something important: a message box in the GUI
+// build, stderr in the console build.
+func notify(msg string) {
+	if guiBuild() {
+		messageBox(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
 
 // exitHooks run on fatalf, which exits without running deferred calls.
 var exitHooks []func()
 
 func atExit(f func()) { exitHooks = append(exitHooks, f) }
 
-// fatalf reports a startup error and exits. The GUI build has no console,
-// so there the error is also shown in a message box instead of vanishing.
+// fatalf reports a startup error and exits: to stderr and the log file
+// (errorf), and in the GUI build also in a message box.
 func fatalf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
-	errorf("%s", msg) // console and, once set up, the log file
+	errorf("%s", msg)
 	for i := len(exitHooks) - 1; i >= 0; i-- {
 		exitHooks[i]()
 	}
-	if c, _, _ := procGetConsoleWindow.Call(); c == 0 {
+	time.Sleep(100 * time.Millisecond) // let the async log writers flush
+	if guiBuild() {
 		messageBox("KeyLayoutPin cannot start:\n\n" + msg)
-	} else {
-		time.Sleep(100 * time.Millisecond) // let the async log writers flush
 	}
 	os.Exit(1)
 }

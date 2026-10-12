@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"keylayoutpin/internal/kbd"
+	"github.com/dronem/keylayoutpin/internal/kbd"
 )
 
 var (
@@ -42,6 +42,7 @@ var (
 	procGetAsyncKeyState       = user32.NewProc("GetAsyncKeyState")
 	procEnumChildWindows       = user32.NewProc("EnumChildWindows")
 	procSendMessageTimeoutW    = user32.NewProc("SendMessageTimeoutW")
+	procIsWindow               = user32.NewProc("IsWindow")
 
 	procGetCurrentThreadId         = kernel32.NewProc("GetCurrentThreadId")
 	procGetModuleHandleW           = kernel32.NewProc("GetModuleHandleW")
@@ -235,4 +236,9 @@ var wakeChildProc = syscall.NewCallback(func(h, _ uintptr) uintptr {
 // accessibility tree and starts reporting focus in input fields.
 func wakeChromium(root uintptr) {
 	procEnumChildWindows.Call(root, wakeChildProc, 0)
+}
+
+func isWindow(hwnd uintptr) bool {
+	r, _, _ := procIsWindow.Call(hwnd)
+	return r != 0
 }

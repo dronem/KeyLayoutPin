@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -47,13 +48,16 @@ type accInfo struct {
 	Editable bool
 }
 
-func coInitializeMTA() uintptr {
+// initCOM joins the calling OS thread to the multithreaded apartment (MTA):
+// unlike STA, it doesn't require the thread to keep pumping messages. The
+// returned func undoes it; it must run on the same thread. CoUninitialize
+// is paired only with a successful CoInitializeEx (S_OK or S_FALSE).
+func initCOM() (done func(), err error) {
 	hr, _, _ := procCoInitializeEx.Call(0, coinitMultithreaded)
-	return hr
-}
-
-func coUninitialize() {
-	procCoUninitialize.Call()
+	if int32(hr) < 0 {
+		return func() {}, fmt.Errorf("CoInitializeEx: 0x%08X", uint32(hr))
+	}
+	return func() { procCoUninitialize.Call() }, nil
 }
 
 // comCall calls method number `method` of the COM object obj.
