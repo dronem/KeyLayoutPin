@@ -1,24 +1,60 @@
 name: Release
 
-# Push a tag to publish a release:
-#   git tag v1.0.0
-#   git push origin v1.0.0
+# Two ways to publish a release:
+#   - Actions → Release → Run workflow: pick patch / minor / major; the next
+#     version is computed from the latest vX.Y.Z tag, and the tag is created
+#     by the release itself;
+#   - push a tag yourself: git tag v1.0.0 && git push origin v1.0.0
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Which part of the version to increase
+        type: choice
+        options: [patch, minor, major]
+        default: patch
   push:
     tags: ['v*']
 
 permissions:
-  contents: write # create the release and upload the files
+  contents: write # create the tag and the release, upload the files
 
 jobs:
   release:
+    # The button releases only from main.
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # all tags, to find the latest version
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false # no dependencies, so no go.sum to key a cache on
+
+      - name: Version
+        shell: pwsh
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $tag = $env:GITHUB_REF_NAME
+          } else {
+            $last = git tag --list 'v*' --sort=-v:refname |
+              Where-Object { $_ -match '^v\d+\.\d+\.\d+$' } | Select-Object -First 1
+            if (-not $last) { $last = 'v0.0.0' }
+            $major, $minor, $patch = $last.TrimStart('v').Split('.') | ForEach-Object { [int]$_ }
+            switch ($env:BUMP) {
+              'major' { $major++; $minor = 0; $patch = 0 }
+              'minor' { $minor++; $patch = 0 }
+              default { $patch++ }
+            }
+            $tag = "v$major.$minor.$patch"
+            if (git tag --list $tag) { throw "tag $tag already exists" }
+          }
+          "Releasing $tag"
+          "TAG=$tag" >> $env:GITHUB_ENV
 
       - name: Test
         run: |
@@ -27,21 +63,25 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: ./build.ps1 -Version $env:GITHUB_REF_NAME.TrimStart('v')
+        run: ./build.ps1 -Version $env:TAG.TrimStart('v')
 
       - name: Package
         shell: pwsh
         run: |
-          $zip = "KeyLayoutPin-$env:GITHUB_REF_NAME-windows-amd64.zip"
+          $zip = "KeyLayoutPin-$env:TAG-windows-amd64.zip"
           Compress-Archive -Path keylayoutpin_bg.exe, keylayoutpin.exe, README.md, LICENSE -DestinationPath $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Out-File -Encoding ascii SHA256SUMS.txt
           "ZIP=$zip" >> $env:GITHUB_ENV
 
+      # For the button, gh creates the tag on the tested commit. A tag made
+      # this way doesn't trigger this workflow again (GITHUB_TOKEN events
+      # don't start workflows), so there is no double release.
       - name: Publish
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:GITHUB_REF_NAME $env:ZIP SHA256SUMS.txt `
-            --title "KeyLayoutPin $env:GITHUB_REF_NAME" --generate-notes
+          gh release create $env:TAG $env:ZIP SHA256SUMS.txt `
+            --target $env:GITHUB_SHA `
+            --title "KeyLayoutPin $env:TAG" --generate-notes
