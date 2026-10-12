@@ -12,10 +12,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false # no dependencies, so no go.sum to key a cache on
 
       - name: gofmt
         shell: pwsh
@@ -41,9 +42,10 @@ jobs:
   portable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false # no dependencies, so no go.sum to key a cache on
       - run: go vet ./internal/...
       - run: go test -count=1 ./internal/...
