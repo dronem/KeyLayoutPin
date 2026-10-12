@@ -1,0 +1,4 @@
+# Always check text files out with LF line endings. Go tools expect LF, and
+# Windows machines (including GitHub's Windows runners, core.autocrlf=true)
+# would otherwise convert them to CRLF and gofmt would flag every file.
+* text=auto eol=lf
