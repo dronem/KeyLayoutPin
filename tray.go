@@ -3,6 +3,7 @@
 package main
 
 import (
+	"flag"
 	"syscall"
 	"unsafe"
 )
@@ -18,12 +19,14 @@ var (
 	procAppendMenuW         = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu      = user32.NewProc("TrackPopupMenu")
 	procDestroyMenu         = user32.NewProc("DestroyMenu")
+	procSetMenuDefaultItem  = user32.NewProc("SetMenuDefaultItem")
 	procGetCursorPos        = user32.NewProc("GetCursorPos")
 	procSetForegroundWindow = user32.NewProc("SetForegroundWindow")
 	procCreateIconIndirect  = user32.NewProc("CreateIconIndirect")
 	procDestroyIcon         = user32.NewProc("DestroyIcon")
 	procDrawTextW           = user32.NewProc("DrawTextW")
 	procShellNotifyIconW    = shell.NewProc("Shell_NotifyIconW")
+	procShellExecuteW       = shell.NewProc("ShellExecuteW")
 	procCreateCompatibleDC  = gdi32.NewProc("CreateCompatibleDC")
 	procCreateDIBSection    = gdi32.NewProc("CreateDIBSection")
 	procCreateBitmap        = gdi32.NewProc("CreateBitmap")
@@ -56,8 +59,13 @@ const (
 	tpmNoNotify    = 0x0080
 	tpmReturnCmd   = 0x0100
 
+	swShowNormal = 1
+
 	menuAutostart = 1
 	menuExit      = 2
+	menuTitle     = 3
+	menuAbout     = 4
+	menuHelp      = 5
 )
 
 type notifyIconData struct {
@@ -137,13 +145,17 @@ func appendMenu(menu uintptr, flags, id uintptr, text string) {
 func (t *tray) showMenu() {
 	menu, _, _ := procCreatePopupMenu.Call()
 	defer procDestroyMenu.Call(menu)
-	appendMenu(menu, mfString|mfGrayed, 0, "KeyLayoutPin "+versionString()+" — keyboard layout pinned to each field")
+	appendMenu(menu, mfString, menuTitle, "KeyLayoutPin")
+	procSetMenuDefaultItem.Call(menu, menuTitle, 0) // the default item is drawn bold
 	appendMenu(menu, mfSeparator, 0, "")
 	auto := uintptr(mfString)
 	if autostartEnabled() {
 		auto |= mfChecked
 	}
 	appendMenu(menu, auto, menuAutostart, "Start with Windows")
+	appendMenu(menu, mfSeparator, 0, "")
+	appendMenu(menu, mfString, menuAbout, "About")
+	appendMenu(menu, mfString, menuHelp, "Help")
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuExit, "Exit")
 
@@ -160,9 +172,24 @@ func (t *tray) showMenu() {
 		if err := setAutostart(!autostartEnabled()); err != nil {
 			messageBox("Cannot change autostart: " + err.Error())
 		}
+	case menuTitle, menuAbout:
+		if askBox(aboutText() + "\n\nOpen the project page?") {
+			openURL(projectURL)
+		}
+	case menuHelp:
+		if askBox(helpText(flag.CommandLine) + "\n\nOpen the full documentation?") {
+			openURL(docsURL)
+		}
 	case menuExit:
 		procPostQuitMessage.Call(0)
 	}
+}
+
+// openURL opens a link in the default browser.
+func openURL(url string) {
+	verb, _ := syscall.UTF16PtrFromString("open")
+	u, _ := syscall.UTF16PtrFromString(url)
+	procShellExecuteW.Call(0, uintptr(unsafe.Pointer(verb)), uintptr(unsafe.Pointer(u)), 0, 0, swShowNormal)
 }
 
 type bitmapInfoHeader struct {

@@ -32,7 +32,9 @@ const (
 	wmClose = 0x0010
 
 	errorAlreadyExists = 183
+	mbYesNo            = 0x4
 	mbIconInformation  = 0x40
+	idYes              = 6
 )
 
 type wndClassEx struct {
@@ -142,10 +144,16 @@ func registerWindowMessage(name string) uint32 {
 	return uint32(r)
 }
 
-func messageBox(text string) {
+func messageBox(text string) { showBox(text, mbIconInformation) }
+
+// askBox shows a Yes/No question and reports whether Yes was chosen.
+func askBox(text string) bool { return showBox(text, mbIconInformation|mbYesNo) == idYes }
+
+func showBox(text string, flags uintptr) uintptr {
 	t, _ := syscall.UTF16PtrFromString(text)
 	c, _ := syscall.UTF16PtrFromString("KeyLayoutPin")
-	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), mbIconInformation)
+	r, _, _ := procMessageBoxW.Call(0, uintptr(unsafe.Pointer(t)), uintptr(unsafe.Pointer(c)), flags)
+	return r
 }
 
 // singleInstance returns false if another copy is already running.
