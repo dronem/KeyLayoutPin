@@ -157,8 +157,8 @@ every keystroke. So here is what it stores and what it doesn't:
 - **The log** without `-v` contains only the app name and layout
   ("[chrome.exe] field: en-US → ja-JP"). With `-v`, and in `-watch` and `-probe` modes, the
   output includes field labels and window/page titles — that is personal data, enable it
-  for diagnostics only. The log file (`-log`) is capped at 1 MB: on startup a large log
-  is renamed to `.old` and the previous `.old` is deleted.
+  for diagnostics only. The log file is capped at 1 MB: when it grows past that, it is
+  renamed to `.old` and the previous `.old` is deleted.
 - In Chrome/Electron the app enables accessibility. After that, page content is available
   via MSAA to other programs running as you as well (although any such program could
   enable it itself). If you don't want that, use `-chromium=false`.

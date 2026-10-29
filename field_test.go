@@ -37,7 +37,7 @@ func TestControlPart(t *testing.T) {
 }
 
 func TestClassify(t *testing.T) {
-	text := accInfo{Name: "Terminal 2, bash", Role: roleSystemText, Editable: true}
+	text := accInfo{Name: "Chat 2", Role: roleSystemText, Editable: true}
 	cases := []struct {
 		name      string
 		rootClass string
@@ -47,7 +47,7 @@ func TestClassify(t *testing.T) {
 		kind      engine.Kind
 	}{
 		{"input field, digits normalized", "Chrome_WidgetWin_1", text, true,
-			"Code.exe|Chrome_WidgetWin_1|ctl|42|Terminal #, bash", engine.Input},
+			"Code.exe|Chrome_WidgetWin_1|ctl|42|Chat #", engine.Input},
 		{"Chromium page document is not a field", "Chrome_WidgetWin_1",
 			accInfo{Name: "Page", Role: roleSystemDocument, Editable: true}, true, "", engine.NotField},
 		{"document elsewhere is a field (Word, WordPad)", "OpusApp",
@@ -63,6 +63,29 @@ func TestClassify(t *testing.T) {
 		if key != c.key || kind != c.kind {
 			t.Errorf("%s: got (%q, %v), want (%q, %v)", c.name, key, kind, c.key, c.kind)
 		}
+	}
+}
+
+// VS Code terminals are one field: the title after the number follows the
+// running process, and screen reader hints are appended.
+func TestClassifyTerminal(t *testing.T) {
+	const want = "Code.exe|Chrome_WidgetWin_1|ctl|42|Terminal #"
+	for _, name := range []string{
+		"Terminal 1",
+		"Terminal 2, bash",
+		"Terminal 1, keylayoutpin Run the command: Toggle Screen Reader Accessibility Mode",
+		"Terminal 3 Run the command: Toggle Screen Reader Accessibility Mode for an optimized",
+	} {
+		key, _, _ := classify("Code.exe", "Chrome_WidgetWin_1", "ctl",
+			accInfo{Name: name, Role: roleSystemText, Editable: true}, true)
+		if key != want {
+			t.Errorf("%q: got key %q, want %q", name, key, want)
+		}
+	}
+	key, _, _ := classify("Code.exe", "Chrome_WidgetWin_1", "ctl",
+		accInfo{Name: "Terminal tabs filter", Role: roleSystemText, Editable: true}, true)
+	if key == want {
+		t.Errorf("a field merely starting with \"Terminal\" must keep its name, got %q", key)
 	}
 }
 

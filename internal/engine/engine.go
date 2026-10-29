@@ -211,24 +211,33 @@ func (e *Engine) leave() {
 	if h == 0 {
 		return
 	}
-	if old, ok := e.mem.Get(e.cur.Key); ok && old == h {
+	// Nothing to change: the same layout is stored, or it is the default
+	// one and no entry exists.
+	if old, ok := e.mem.Get(e.cur.Key); ok && old == h || !ok && e.isDefault(h) {
 		return
 	}
 	e.remember(h)
 }
 
+func (e *Engine) isDefault(h kbd.HKL) bool { return e.fallback != nil && e.fallback() == h }
+
 // remember stores the current field's layout. If it equals the
 // default layout, no entry is needed and it is removed: the less
 // is stored about where you typed, the better.
 func (e *Engine) remember(h kbd.HKL) {
+	def := e.isDefault(h)
 	var err error
-	if e.fallback != nil && e.fallback() == h {
+	if def {
 		err = e.mem.Forget(e.cur.Key)
 	} else {
 		err = e.mem.Set(e.cur.Key, h)
 	}
 	if err != nil {
 		e.errf("cannot save: %v", err)
+		return
+	}
+	if def {
+		e.logf("[%s] %s: %s is the default — not stored", e.cur.App, e.cur.Name, e.name(h))
 		return
 	}
 	e.logf("[%s] %s: remembered %s", e.cur.App, e.cur.Name, e.name(h))

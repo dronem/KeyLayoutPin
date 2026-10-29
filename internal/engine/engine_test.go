@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,6 +119,25 @@ func TestBackToDefaultForgets(t *testing.T) {
 	e.Tick()
 	if _, ok := mem["A"]; ok {
 		t.Fatal("the default layout must not be stored")
+	}
+}
+
+// Leaving a field with the default layout and no entry changes nothing,
+// so no save is logged.
+func TestLeaveDefaultFieldIsQuiet(t *testing.T) {
+	sys := &fakeSystem{layout: en, now: time.Unix(100, 0), fg: 1}
+	var saves []string
+	e := New(Config{System: sys, Memory: fakeMemory{}, Fallback: func() kbd.HKL { return en },
+		Logf: func(f string, a ...any) {
+			if m := fmt.Sprintf(f, a...); strings.Contains(m, "remembered") || strings.Contains(m, "not stored") {
+				saves = append(saves, m)
+			}
+		}})
+	e.Focus(field("terminal", 1))
+	e.Tick()
+	e.Focus(field("chat", 1))
+	if len(saves) != 0 {
+		t.Fatalf("nothing changed, yet logged: %q", saves)
 	}
 }
 

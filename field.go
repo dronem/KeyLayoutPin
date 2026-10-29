@@ -169,6 +169,20 @@ func isChromium(rootClass string) bool { return strings.HasPrefix(rootClass, "Ch
 
 var digits = regexp.MustCompile(`\d+`)
 
+// terminalName matches VS Code terminal labels: "Terminal 2, powershell Run
+// the command: …". The part after the number follows the running process
+// and the screen reader hints, so all terminals become one field.
+var terminalName = regexp.MustCompile(`^Terminal #([ ,].*)?$`)
+
+// fieldKeyName is the field name's share of the key.
+func fieldKeyName(name string) string {
+	name = digits.ReplaceAllString(name, "#")
+	if terminalName.MatchString(name) {
+		return "Terminal #"
+	}
+	return name
+}
+
 // classify decides what kind of focus this is and builds the field key:
 // app | window class | control part | role | field name.
 func classify(app, rootClass, ctl string, info accInfo, ok bool) (key, name string, kind engine.Kind) {
@@ -183,7 +197,7 @@ func classify(app, rootClass, ctl string, info accInfo, ok bool) (key, name stri
 	switch {
 	case ok && info.Editable:
 		// Numbers in names usually change ("Terminal 2", "3 unread").
-		key = base + "|" + strconv.Itoa(int(info.Role)) + "|" + digits.ReplaceAllString(info.Name, "#")
+		key = base + "|" + strconv.Itoa(int(info.Role)) + "|" + fieldKeyName(info.Name)
 		name = info.Name
 		if name == "" {
 			name = "(unnamed)"
