@@ -91,3 +91,35 @@ func TestValidateInterval(t *testing.T) {
 		}
 	}
 }
+
+// Diagnostic modes print field names, so they write a file only when -log
+// is given explicitly; the app itself always keeps an errors-only log.
+func TestLogFileChoice(t *testing.T) {
+	saved := flag.CommandLine
+	defer func() { flag.CommandLine = saved }()
+	cases := []struct {
+		args []string
+		file string
+		full bool
+	}{
+		{nil, defaultLogPath(), false},
+		{[]string{"-log"}, defaultLogPath(), true},
+		{[]string{"-log=off"}, "", false},
+		{[]string{"-watch=1m"}, "", false},
+		{[]string{"-watch=1m", "-log", `C:\w.txt`}, `C:\w.txt`, true},
+		{[]string{"-probe=5s", "-log"}, defaultLogPath(), true},
+	}
+	for _, c := range cases {
+		flag.CommandLine = flag.NewFlagSet("test", flag.ContinueOnError)
+		o := &options{log: logFlag{path: defaultLogPath()}}
+		flag.Var(&o.log, "log", "")
+		flag.DurationVar(&o.watch, "watch", 0, "")
+		flag.DurationVar(&o.probe, "probe", 0, "")
+		if err := parseArgs(flag.CommandLine, &o.log, c.args); err != nil {
+			t.Fatalf("%q: %v", c.args, err)
+		}
+		if o.logFile() != c.file || o.fullLog() != c.full {
+			t.Errorf("%q: file=%q full=%v, want file=%q full=%v", c.args, o.logFile(), o.fullLog(), c.file, c.full)
+		}
+	}
+}

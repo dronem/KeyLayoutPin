@@ -4,6 +4,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dronem/keylayoutpin/internal/engine"
 )
@@ -142,5 +143,53 @@ func TestWakeOnceForgetsClosedWindows(t *testing.T) {
 	}
 	if n := len(d.woken); n > prunePeriod {
 		t.Fatalf("%d entries kept for closed windows, want at most %d", n, prunePeriod)
+	}
+}
+
+// Chromium turns accessibility off again after a while: a window is woken
+// again, but not more often than rewakeAfter.
+func TestRewakeIsRateLimited(t *testing.T) {
+	now := time.Unix(100, 0)
+	woken := 0
+	d := newDetector(true, false)
+	d.wake = func(uintptr) { woken++ }
+	d.alive = func(uintptr) bool { return true }
+	d.now = func() time.Time { return now }
+
+	if !d.wakeOnce(0x10, 1) || d.wakeOnce(0x10, 1) {
+		t.Fatal("wakeOnce must report waking only the first time")
+	}
+	now = now.Add(rewakeAfter - time.Second)
+	if d.rewake(0x10, 1) {
+		t.Fatal("woken too soon after the last wake")
+	}
+	now = now.Add(time.Second)
+	if !d.rewake(0x10, 1) || d.rewake(0x10, 1) {
+		t.Fatal("must be woken again once, after rewakeAfter")
+	}
+	if !d.rewake(0x10, 2) {
+		t.Fatal("a reused HWND of another process must be woken right away")
+	}
+	if woken != 3 {
+		t.Fatalf("woken %d times, want 3", woken)
+	}
+}
+
+func TestPageOnly(t *testing.T) {
+	cases := []struct {
+		info accInfo
+		ok   bool
+		want bool
+	}{
+		{accInfo{}, false, true},
+		{accInfo{Role: roleSystemDocument}, true, true},
+		{accInfo{Role: roleSystemClient}, true, true},
+		{accInfo{Role: roleSystemText, Editable: true}, true, false},
+		{accInfo{Role: 0x2B}, true, false}, // a button: focus inside is known
+	}
+	for _, c := range cases {
+		if got := pageOnly(c.info, c.ok); got != c.want {
+			t.Errorf("pageOnly(%+v, %v) = %v, want %v", c.info, c.ok, got, c.want)
+		}
 	}
 }

@@ -48,8 +48,10 @@ Tests: `go test ./...`
    - **button, menu, list, tab, taskbar** — not a field.
 
    Chromium/Electron apps don't expose page fields by default. The app wakes each such
-   window once (`WM_GETOBJECT` to `Chrome_RenderWidgetHostHWND`) and finds the focused
-   element via `get_accFocus`.
+   window (`WM_GETOBJECT` to `Chrome_RenderWidgetHostHWND`) and finds the focused
+   element via `get_accFocus`. Chromium turns accessibility off again after a while, so
+   when only the whole page is seen in focus, the window is woken again (at most every
+   10 s) and the focus is looked up a few more times, 100 ms apart.
 3. On entering a field, `WM_INPUTLANGCHANGEREQUEST` with the remembered (or default) layout
    is sent to the focused window.
 4. A timer (every 100 ms) watches the foreground window's layout. Every change is one of

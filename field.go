@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/dronem/keylayoutpin/internal/engine"
 )
@@ -31,13 +32,30 @@ type detector struct {
 
 	wake  func(root uintptr)      // wakes a Chromium window (wakeChromium)
 	alive func(hwnd uintptr) bool // the window still exists (IsWindow)
+	now   func() time.Time
+	sleep func(time.Duration)
 
 	mu    sync.Mutex
-	woken map[uintptr]uint32 // Chromium windows already woken → their process
+	woken map[uintptr]wakeEntry // Chromium windows already woken
+}
+
+type wakeEntry struct {
+	pid uint32
+	at  time.Time // when it was last woken
 }
 
 // prunePeriod: how many new windows to wake between sweeps of closed ones.
 const prunePeriod = 32
+
+// Chromium turns accessibility off again after a while, and then only the
+// whole page is seen in focus. Such a window is woken again, but not more
+// often than rewakeAfter; its tree is rebuilt in the background, so the
+// focus is looked up again a few times, rewakePause apart.
+const (
+	rewakeAfter = 10 * time.Second
+	rewakePause = 100 * time.Millisecond
+	rewakeTries = 4
+)
 
 func newDetector(wakeEnabled, alwaysWalk bool) *detector {
 	return &detector{
@@ -45,7 +63,9 @@ func newDetector(wakeEnabled, alwaysWalk bool) *detector {
 		alwaysWalk:  alwaysWalk,
 		wake:        wakeChromium,
 		alive:       isWindow,
-		woken:       map[uintptr]uint32{},
+		now:         time.Now,
+		sleep:       time.Sleep,
+		woken:       map[uintptr]wakeEntry{},
 	}
 }
 
@@ -53,23 +73,44 @@ func newDetector(wakeEnabled, alwaysWalk bool) *detector {
 // window is identified by its HWND and process together: a new window that
 // got the number of a closed one is woken again. Entries of closed windows
 // are dropped from time to time, so the map doesn't grow forever.
-func (d *detector) wakeOnce(root uintptr, pid uint32) {
+// Reports whether it woke the window now.
+func (d *detector) wakeOnce(root uintptr, pid uint32) bool {
+	return d.wakeIf(root, pid, func(w wakeEntry, known bool) bool { return !known || w.pid != pid })
+}
+
+// rewake wakes a Chromium window again unless it was woken less than
+// rewakeAfter ago. Reports whether it woke the window now.
+func (d *detector) rewake(root uintptr, pid uint32) bool {
+	return d.wakeIf(root, pid, func(w wakeEntry, known bool) bool {
+		return !known || w.pid != pid || d.now().Sub(w.at) >= rewakeAfter
+	})
+}
+
+func (d *detector) wakeIf(root uintptr, pid uint32, due func(w wakeEntry, known bool) bool) bool {
 	d.mu.Lock()
-	done := d.woken[root] == pid
-	if !done {
-		if len(d.woken)%prunePeriod == prunePeriod-1 {
+	w, known := d.woken[root]
+	wake := due(w, known)
+	if wake {
+		if !known && len(d.woken)%prunePeriod == prunePeriod-1 {
 			for h := range d.woken {
 				if !d.alive(h) {
 					delete(d.woken, h)
 				}
 			}
 		}
-		d.woken[root] = pid
+		d.woken[root] = wakeEntry{pid: pid, at: d.now()}
 	}
 	d.mu.Unlock()
-	if !done {
+	if wake {
 		d.wake(root)
 	}
+	return wake
+}
+
+// pageOnly: the focus is seen only as the whole page or window, not what
+// inside it has focus.
+func pageOnly(info accInfo, ok bool) bool {
+	return !ok || info.Role == roleSystemDocument || info.Role == roleSystemClient || info.Role == roleSystemWindow
 }
 
 // describe finds out what received focus. Safe to call from several
@@ -98,9 +139,8 @@ func (d *detector) describe(ev focusEvent) focus {
 		return r
 	}
 
-	if d.wakeEnabled && isChromium(rootClass) {
-		d.wakeOnce(root, pid)
-	}
+	chromium := d.wakeEnabled && isChromium(rootClass)
+	woke := chromium && d.wakeOnce(root, pid)
 
 	info, ok := accessibleFromEvent(ev.hwnd, ev.obj, ev.child)
 	r.event, r.eventOK = info, ok
@@ -113,6 +153,17 @@ func (d *detector) describe(ev focusEvent) focus {
 	if needWalk && r.walkOK && r.walk.Role != 0 &&
 		(!ok || r.walk.Editable || info.Role == roleSystemClient || info.Role == roleSystemWindow) {
 		info, ok = r.walk, true
+	}
+	// Just woken, or accessibility went off again: wait for the tree.
+	if chromium && pageOnly(info, ok) && (woke || d.rewake(root, pid)) {
+		for i := 0; i < rewakeTries; i++ {
+			d.sleep(rewakePause)
+			if w, _, wok := focusedInWindow(root); wok && w.Role != 0 && !pageOnly(w, true) {
+				info, ok = w, true
+				r.walk, r.walkOK = w, true
+				break
+			}
+		}
 	}
 
 	key, name, kind := classify(app, rootClass, ctl, info, ok)

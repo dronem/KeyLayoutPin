@@ -57,8 +57,6 @@ Known cases:
   share one layout.
 - **Fields whose name includes changing text** — "Message to John", "Reply to Anna" — are a
   new field for each name.
-- **The first focus in a freshly opened Chrome/Electron window** may count as the whole
-  window; the next ones are recognized properly.
 - **Console windows** (conhost, Windows Terminal) report the layout unreliably.
 
 ## The log says an app is not responding

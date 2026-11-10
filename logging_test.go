@@ -50,3 +50,18 @@ func TestRotatingFileRotatesBigFileOnOpen(t *testing.T) {
 		t.Fatalf("expected a fresh log, got %q", data)
 	}
 }
+
+// The async log keeps lines in order, flushes them on Close and copies
+// each line: the caller may reuse its buffer right after Write.
+func TestAsyncWriterFlushesInOrder(t *testing.T) {
+	var out strings.Builder
+	a := newAsyncWriter(&out)
+	buf := []byte("one\n")
+	a.Write(buf)
+	copy(buf, "XXX\n") // reused by the caller
+	a.Write([]byte("two\n"))
+	a.Close()
+	if out.String() != "one\ntwo\n" {
+		t.Fatalf("got %q", out.String())
+	}
+}

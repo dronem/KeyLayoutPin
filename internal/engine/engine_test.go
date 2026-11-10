@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -22,14 +23,21 @@ type fakeSystem struct {
 	now    time.Time
 	fg     uintptr   // foreground window
 	hotkey time.Time // last Ctrl+Shift press
+	reject bool      // the window rejects layout requests
 }
 
-func (s *fakeSystem) Layout(uint32) kbd.HKL             { return s.layout }
-func (s *fakeSystem) Request(_ uintptr, h kbd.HKL) bool { s.queue = append(s.queue, h); return true }
-func (s *fakeSystem) Now() time.Time                    { return s.now }
-func (s *fakeSystem) wait(d time.Duration)              { s.now = s.now.Add(d) }
-func (s *fakeSystem) Foreground() uintptr               { return s.fg }
-func (s *fakeSystem) LastHotkey() time.Time             { return s.hotkey }
+func (s *fakeSystem) Layout(uint32) kbd.HKL { return s.layout }
+func (s *fakeSystem) Request(_ uintptr, h kbd.HKL) bool {
+	if s.reject {
+		return false
+	}
+	s.queue = append(s.queue, h)
+	return true
+}
+func (s *fakeSystem) Now() time.Time        { return s.now }
+func (s *fakeSystem) wait(d time.Duration)  { s.now = s.now.Add(d) }
+func (s *fakeSystem) Foreground() uintptr   { return s.fg }
+func (s *fakeSystem) LastHotkey() time.Time { return s.hotkey }
 
 // userSwitch: the user pressed Ctrl+Shift.
 func (s *fakeSystem) userSwitch(h kbd.HKL) { s.layout, s.hotkey = h, s.now }
@@ -331,4 +339,38 @@ func TestLeaveRemembersNonHotkeyChange(t *testing.T) {
 	e.Tick()
 	e.Focus(field("other", 1))
 	expect(t, "memory chat", mem["chat"], ja)
+}
+
+// A window that rejects requests (e.g. running as administrator) is reported,
+// and nothing is left waiting for a switch that will never come.
+func TestRejectedRequestIsReported(t *testing.T) {
+	sys := &fakeSystem{layout: ja, now: time.Unix(100, 0), fg: 1, reject: true}
+	var errs []string
+	e := New(Config{System: sys, Memory: fakeMemory{}, Fallback: func() kbd.HKL { return en },
+		Errf: func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }})
+	e.Focus(field("admin", 1))
+	if len(errs) != 1 || !strings.Contains(errs[0], "rejected") {
+		t.Fatalf("want one rejection error, got %q", errs)
+	}
+	if e.pending(en) {
+		t.Fatal("a rejected request must not be waited for")
+	}
+}
+
+type failingMemory struct{ fakeMemory }
+
+func (failingMemory) Set(string, kbd.HKL) error { return errors.New("disk full") }
+
+// A failed save is reported, not silently lost.
+func TestSaveErrorIsReported(t *testing.T) {
+	sys := &fakeSystem{layout: en, now: time.Unix(100, 0), fg: 1}
+	var errs []string
+	e := New(Config{System: sys, Memory: failingMemory{fakeMemory{}}, Fallback: func() kbd.HKL { return en },
+		Errf: func(f string, a ...any) { errs = append(errs, fmt.Sprintf(f, a...)) }})
+	e.Focus(field("chat", 1))
+	sys.userSwitch(ja)
+	e.Tick()
+	if len(errs) != 1 || !strings.Contains(errs[0], "disk full") {
+		t.Fatalf("want the save error reported, got %q", errs)
+	}
 }
