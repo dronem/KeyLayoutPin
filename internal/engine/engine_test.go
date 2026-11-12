@@ -374,3 +374,20 @@ func TestSaveErrorIsReported(t *testing.T) {
 		t.Fatalf("want the save error reported, got %q", errs)
 	}
 }
+
+// OnEnter reports each new field once, with whether it has a stored layout.
+func TestOnEnter(t *testing.T) {
+	sys := &fakeSystem{layout: en, now: time.Unix(100, 0), fg: 1}
+	mem := fakeMemory{"B": ja}
+	var got []string
+	e := New(Config{System: sys, Memory: mem, Fallback: func() kbd.HKL { return en },
+		OnEnter: func(f Field, remembered bool) { got = append(got, fmt.Sprintf("%s:%v", f.Key, remembered)) }})
+
+	e.Focus(field("A", 1))
+	e.Focus(button(1))     // not a field
+	e.Focus(field("A", 1)) // the same field again
+	e.Focus(field("B", 1))
+	if want := "A:false B:true"; strings.Join(got, " ") != want {
+		t.Fatalf("OnEnter calls %q, want %q", strings.Join(got, " "), want)
+	}
+}

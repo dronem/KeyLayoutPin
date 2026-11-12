@@ -22,17 +22,19 @@ import (
 // The hook lives on its own thread: Windows silently removes an LL hook
 // whose thread stops responding, and MSAA calls can be slow.
 
+// Win32 constants from WinUser.h; the comment gives the SDK name.
 const (
-	whKeyboardLL = 13
-	wmKeyDown    = 0x0100
-	wmSysKeyDown = 0x0104
+	whKeyboardLL = 13     // WH_KEYBOARD_LL: SetWindowsHookEx — a low-level keyboard hook
+	wmKeyDown    = 0x0100 // WM_KEYDOWN: a key was pressed
+	wmSysKeyDown = 0x0104 // WM_SYSKEYDOWN: a key was pressed with Alt held
 
-	vkShift, vkLShift, vkRShift = 0x10, 0xA0, 0xA1
-	vkCtrl, vkLCtrl, vkRCtrl    = 0x11, 0xA2, 0xA3
-	vkAlt, vkLAlt, vkRAlt       = 0x12, 0xA4, 0xA5
-	vkLWin, vkRWin              = 0x5B, 0x5C
-	vkSpace                     = 0x20
-	vkGrave                     = 0xC0
+	// Virtual-key codes (VK_*): either / left / right key.
+	vkShift, vkLShift, vkRShift = 0x10, 0xA0, 0xA1 // VK_SHIFT, VK_LSHIFT, VK_RSHIFT
+	vkCtrl, vkLCtrl, vkRCtrl    = 0x11, 0xA2, 0xA3 // VK_CONTROL, VK_LCONTROL, VK_RCONTROL
+	vkAlt, vkLAlt, vkRAlt       = 0x12, 0xA4, 0xA5 // VK_MENU, VK_LMENU, VK_RMENU (Alt)
+	vkLWin, vkRWin              = 0x5B, 0x5C       // VK_LWIN, VK_RWIN
+	vkSpace                     = 0x20             // VK_SPACE
+	vkGrave                     = 0xC0             // VK_OEM_3: the grave accent / tilde key (can be set to switch layouts on its own)
 )
 
 type kbdLLHookStruct struct {

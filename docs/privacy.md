@@ -28,6 +28,8 @@ app Y?"), but they can't list your fields.
 The default layout is not stored: an entry exists only if a field has a different one. At
 most 1000 entries are kept; the oldest are dropped.
 
+`settings.json` next to it holds only the choices from the Settings window.
+
 The files live in `Local`, not `Roaming`, so they are not synced to servers with your user
 profile. Only your account has access.
 

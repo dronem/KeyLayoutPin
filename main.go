@@ -77,6 +77,10 @@ func run(o *options) {
 	if err != nil {
 		fatalf("cannot read %s: %v", o.db, err)
 	}
+	set, err := loadSettings(settingsPath(o.db))
+	if err != nil {
+		errorf("cannot read %s, using the defaults: %v", set.path, err)
+	}
 
 	// The hooks and the window are bound to this thread.
 	runtime.LockOSThread()
@@ -92,6 +96,13 @@ func run(o *options) {
 	tr := newTray(win)
 	defer tr.close()
 	atExit(tr.close) // fatalf skips defers — don't leave a ghost icon
+	tr.openSettings = func() {
+		showSettings(set, tr.icon, func() {
+			if !set.FieldDot {
+				tr.hideDot()
+			}
+		})
+	}
 
 	eng := engine.New(engine.Config{
 		System:   winSystem{keys},
@@ -100,6 +111,11 @@ func run(o *options) {
 		Logf:     log.Printf,
 		Errf:     errorf,
 		Name:     layoutName,
+		OnEnter: func(_ engine.Field, remembered bool) {
+			if set.FieldDot {
+				tr.flashDot(remembered)
+			}
+		},
 	})
 	det := newDetector(o.chromium, false)
 	t := newTracker(engineSink{eng, o.verbose}, win, det.describe, det.foregroundChromium)

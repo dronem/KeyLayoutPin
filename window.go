@@ -27,14 +27,17 @@ var (
 	procCreateMutexW           = kernel32.NewProc("CreateMutexW")
 )
 
+// Win32 constants from the Windows SDK headers; the comment gives the SDK name.
 const (
-	wmNull  = 0x0000
-	wmClose = 0x0010
+	wmNull  = 0x0000 // WM_NULL: does nothing; wakes up a menu's message loop
+	wmClose = 0x0010 // WM_CLOSE: a request to close (e.g. taskkill without /F)
 
-	errorAlreadyExists = 183
-	mbYesNo            = 0x4
-	mbIconInformation  = 0x40
-	idYes              = 6
+	errorAlreadyExists = 183 // ERROR_ALREADY_EXISTS: the mutex exists — another copy runs
+
+	// MessageBox: buttons, icon and the answer.
+	mbYesNo           = 0x4  // MB_YESNO: Yes and No buttons
+	mbIconInformation = 0x40 // MB_ICONINFORMATION: the "i" icon
+	idYes             = 6    // IDYES: Yes was clicked
 )
 
 type wndClassEx struct {
@@ -118,6 +121,25 @@ func (w *msgWindow) every(id uintptr, d time.Duration, f func()) error {
 	return nil
 }
 
+// after runs f once on the window's thread after d. Calling it again with
+// the same id before then restarts the countdown, so only the last f runs.
+func (w *msgWindow) after(id uintptr, d time.Duration, f func()) {
+	if r, _, err := procSetTimer.Call(w.hwnd, id, uintptr(d.Milliseconds()), 0); r == 0 {
+		errorf("SetTimer: %v", err)
+		return
+	}
+	w.timers[id] = func() {
+		w.cancel(id)
+		f()
+	}
+}
+
+// cancel stops a timer started by every or after.
+func (w *msgWindow) cancel(id uintptr) {
+	procKillTimer.Call(w.hwnd, id)
+	delete(w.timers, id)
+}
+
 func (w *msgWindow) close() {
 	for id := range w.timers {
 		procKillTimer.Call(w.hwnd, id)
@@ -132,6 +154,12 @@ func messageLoop() {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			return
+		}
+		// Tab, Esc and Enter in the Settings window.
+		if dialog != 0 {
+			if r, _, _ := procIsDialogMessageW.Call(dialog, uintptr(unsafe.Pointer(&m))); r != 0 {
+				continue
+			}
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		procDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))

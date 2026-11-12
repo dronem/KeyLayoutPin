@@ -54,9 +54,22 @@ Click the **Aa** icon (left or right button):
 |---|---|
 | **KeyLayoutPin** | the title; opens About |
 | **Start with Windows** | checked when the app starts at login — click to toggle |
+| **Settings…** | opens the [Settings](#settings) window |
 | **About** | a short description, the version and the project link |
 | **Help** | the main principles and all command-line options, with a link to these pages |
 | **Exit** | stops the app |
+
+## Settings
+
+**Settings…** in the tray menu opens a small window. Changes apply and are saved at once.
+
+- **Show a dot on the tray icon when you enter a field** — each time you click into another
+  field, a dot appears on the **Aa** icon for a second: **green** if the field has a
+  remembered layout, **yellow** if it gets the default one. Moving to the next field
+  replaces the dot right away. Off by default.
+
+The settings are kept in `settings.json` next to the memory file (`-db`), so a portable
+copy takes them along.
 
 ## Starting with Windows
 

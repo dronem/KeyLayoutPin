@@ -34,9 +34,9 @@ var hkeyCurrentUser = signExtend(0x80000001)
 func signExtend(v uint32) uintptr { return uintptr(int(int32(v))) }
 
 const (
-	keyRead  = 0x20019
-	keyWrite = 0x20006
-	regSz    = 1
+	keyRead  = 0x20019 // KEY_READ: registry access for reading
+	keyWrite = 0x20006 // KEY_WRITE: registry access for writing
+	regSz    = 1       // REG_SZ: a string value
 
 	runKey    = `Software\Microsoft\Windows\CurrentVersion\Run`
 	initValue = "AutostartInitialized"
@@ -127,8 +127,8 @@ var persistentFlags = map[string]bool{"db": true, "default": true, "chromium": t
 
 const (
 	guiExeName        = "keylayoutpin_bg.exe"
-	subsystemGUI      = 2
-	peSignatureOffset = 0x3C
+	subsystemGUI      = 2    // IMAGE_SUBSYSTEM_WINDOWS_GUI: an exe without a console
+	peSignatureOffset = 0x3C // where an exe file stores the offset of its PE header (e_lfanew)
 )
 
 // autostartCommand is the command line written to the Run key: the GUI

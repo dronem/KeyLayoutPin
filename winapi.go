@@ -59,23 +59,27 @@ var (
 	procAccessibleObjectFromEvent = oleacc.NewProc("AccessibleObjectFromEvent")
 )
 
+// Win32 constants, copied from the Windows SDK headers (WinUser.h,
+// WinNT.h, objbase.h, WinNls.h) under Go names; the comment gives the SDK name.
 const (
-	eventObjectFocus = 0x8005
+	eventObjectFocus = 0x8005 // EVENT_OBJECT_FOCUS: something got keyboard focus
 
-	wineventOutOfContext   = 0x0000
-	wineventSkipOwnProcess = 0x0002
+	// SetWinEventHook: how the hook is called.
+	wineventOutOfContext   = 0x0000 // WINEVENT_OUTOFCONTEXT: in our process, no DLL injected into others
+	wineventSkipOwnProcess = 0x0002 // WINEVENT_SKIPOWNPROCESS: not for our own windows
 
-	wmQuit                   = 0x0012
-	wmTimer                  = 0x0113
-	wmInputLangChangeRequest = 0x0050
-	wmApp                    = 0x8000
-	wmFocusChanged           = wmApp + 1
-	gaRoot                   = 2
-	spiGetDefaultInputLang   = 0x0059
-	processQueryLimitedInfo  = 0x1000
-	coinitMultithreaded      = 0x0
-	localeNameMaxLength      = 85
-	localeAllowNeutralNames  = 0x08000000
+	wmQuit                   = 0x0012    // WM_QUIT: ends the message loop
+	wmTimer                  = 0x0113    // WM_TIMER: a SetTimer timer fired
+	wmInputLangChangeRequest = 0x0050    // WM_INPUTLANGCHANGEREQUEST: asks a window to switch the layout
+	wmApp                    = 0x8000    // WM_APP: the first message number free for the app's own use
+	wmFocusChanged           = wmApp + 1 // ours: a focus event is waiting for the resolver
+
+	gaRoot                  = 2          // GA_ROOT: GetAncestor — the top-level window
+	spiGetDefaultInputLang  = 0x0059     // SPI_GETDEFAULTINPUTLANG: SystemParametersInfo — the default layout
+	processQueryLimitedInfo = 0x1000     // PROCESS_QUERY_LIMITED_INFORMATION: OpenProcess — enough to read the exe name
+	coinitMultithreaded     = 0x0        // COINIT_MULTITHREADED: CoInitializeEx — COM in MTA mode
+	localeNameMaxLength     = 85         // LOCALE_NAME_MAX_LENGTH: buffer size for "en-US" etc.
+	localeAllowNeutralNames = 0x08000000 // LOCALE_ALLOW_NEUTRAL_NAMES: LCIDToLocaleName — "ja" is fine too
 )
 
 type point struct{ X, Y int32 }
@@ -218,8 +222,9 @@ func requestLayout(hwnd uintptr, h HKL) bool {
 }
 
 const (
-	wmGetObject      = 0x003D
-	smtoAbortIfHung  = 0x0002
+	wmGetObject     = 0x003D // WM_GETOBJECT: asks a window for its accessibility object
+	smtoAbortIfHung = 0x0002 // SMTO_ABORTIFHUNG: SendMessageTimeout — don't wait for a hung window
+	// The window class of Chromium's page area, which answers WM_GETOBJECT.
 	chromiumRenderer = "Chrome_RenderWidgetHostHWND"
 )
 

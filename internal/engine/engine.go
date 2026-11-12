@@ -96,6 +96,7 @@ type Engine struct {
 	logf     func(format string, args ...any)
 	errf     func(format string, args ...any)
 	name     func(kbd.HKL) string
+	onEnter  func(f Field, remembered bool)
 
 	cur      *Field    // field holding the caret; buttons and menus don't change it
 	focusAt  time.Time // when focus entered cur
@@ -112,10 +113,13 @@ type Config struct {
 	Logf     func(format string, args ...any) // informational messages
 	Errf     func(format string, args ...any) // errors
 	Name     func(kbd.HKL) string             // layout name for messages, e.g. "ja-JP"
+	// OnEnter is called when focus enters another field; remembered tells
+	// whether the field has a stored layout. Optional.
+	OnEnter func(f Field, remembered bool)
 }
 
 func New(c Config) *Engine {
-	e := &Engine{sys: c.System, mem: c.Memory, fallback: c.Fallback, logf: c.Logf, errf: c.Errf, name: c.Name}
+	e := &Engine{sys: c.System, mem: c.Memory, fallback: c.Fallback, logf: c.Logf, errf: c.Errf, name: c.Name, onEnter: c.OnEnter}
 	nop := func(string, ...any) {}
 	if e.logf == nil {
 		e.logf = nop
@@ -151,6 +155,9 @@ func (e *Engine) Focus(f Field) {
 
 	want, why := e.desired(f.Key)
 	e.want = want
+	if !same && e.onEnter != nil {
+		e.onEnter(f, why == whyRemembered)
+	}
 	if want == 0 || want == e.last {
 		if !same && want != 0 {
 			e.logf("[%s] %s: %s (%s)", f.App, f.Name, e.name(want), why)
@@ -243,9 +250,11 @@ func (e *Engine) remember(h kbd.HKL) {
 	e.logf("[%s] %s: remembered %s", e.cur.App, e.cur.Name, e.name(h))
 }
 
+const whyRemembered = "remembered"
+
 func (e *Engine) desired(key string) (kbd.HKL, string) {
 	if h, ok := e.mem.Get(key); ok {
-		return h, "remembered"
+		return h, whyRemembered
 	}
 	if e.fallback != nil {
 		if h := e.fallback(); h != 0 {

@@ -4,7 +4,9 @@ package main
 
 import (
 	"flag"
+	"math"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -39,33 +41,55 @@ var (
 	procGdiFlush            = gdi32.NewProc("GdiFlush")
 )
 
+// Win32 constants, copied from the Windows SDK headers (WinUser.h,
+// shellapi.h) under Go names; the comment gives the SDK name to look up.
 const (
-	wmLButtonUp    = 0x0202
-	wmRButtonUp    = 0x0205
+	// Mouse messages: the tray icon reports clicks with these.
+	wmLButtonUp = 0x0202 // WM_LBUTTONUP: left button released
+	wmRButtonUp = 0x0205 // WM_RBUTTONUP: right button released
+	// Ours: the message the tray icon sends to our window on mouse events.
 	wmTrayCallback = wmApp + 3
 
-	nimAdd     = 0
-	nimDelete  = 2
-	nifMessage = 0x1
-	nifIcon    = 0x2
-	nifTip     = 0x4
+	// Shell_NotifyIcon: what to do with the tray icon.
+	nimAdd    = 0 // NIM_ADD: add it
+	nimModify = 1 // NIM_MODIFY: change it (the dot)
+	nimDelete = 2 // NIM_DELETE: remove it
+	// NOTIFYICONDATA.uFlags: which of its fields are filled in.
+	nifMessage = 0x1 // NIF_MESSAGE: CallbackMessage
+	nifIcon    = 0x2 // NIF_ICON: Icon
+	nifTip     = 0x4 // NIF_TIP: Tip, the hover text
 
-	mfString    = 0x0000
-	mfGrayed    = 0x0001
-	mfChecked   = 0x0008
-	mfSeparator = 0x0800
+	// AppendMenu: the kind of a menu item.
+	mfString    = 0x0000 // MF_STRING: a normal text item
+	mfGrayed    = 0x0001 // MF_GRAYED: disabled
+	mfChecked   = 0x0008 // MF_CHECKED: with a check mark
+	mfSeparator = 0x0800 // MF_SEPARATOR: a divider line
 
-	tpmRightButton = 0x0002
-	tpmNoNotify    = 0x0080
-	tpmReturnCmd   = 0x0100
+	// TrackPopupMenu: how the menu behaves.
+	tpmRightButton = 0x0002 // TPM_RIGHTBUTTON: items react to the right button too
+	tpmNoNotify    = 0x0080 // TPM_NONOTIFY: don't send WM_COMMAND for the choice...
+	tpmReturnCmd   = 0x0100 // TPM_RETURNCMD: ...return it from the call instead
 
-	swShowNormal = 1
+	swShowNormal = 1 // SW_SHOWNORMAL: ShellExecute — open the browser normally
 
+	// Ours: menu item IDs, returned by TrackPopupMenu.
 	menuAutostart = 1
 	menuExit      = 2
 	menuTitle     = 3
 	menuAbout     = 4
 	menuHelp      = 5
+	menuSettings  = 6
+
+	timerDot = 2 // ours: msgWindow timer id; 1 is the layout check
+	// dotTime: how long the field dot stays on the tray icon.
+	dotTime = time.Second
+)
+
+// Tray icon dots, as ARGB (alpha, red, green, blue):
+// the field has a remembered layout / gets the default.
+const (
+	dotGreen  = 0xFF22C55E
+	dotYellow = 0xFFFACC15
 )
 
 type notifyIconData struct {
@@ -87,12 +111,18 @@ type notifyIconData struct {
 }
 
 type tray struct {
-	win  *msgWindow
-	icon uintptr
+	win    *msgWindow
+	icon   uintptr // the plain icon
+	green  uintptr // with a green dot: the field has a remembered layout
+	yellow uintptr // with a yellow dot: the field gets the default
+	shown  uintptr // the icon in the notification area now
+
+	openSettings func() // the Settings menu item
 }
 
 func newTray(win *msgWindow) *tray {
-	t := &tray{win: win, icon: makeIcon()}
+	t := &tray{win: win, icon: makeIcon(0), green: makeIcon(dotGreen), yellow: makeIcon(dotYellow)}
+	t.shown = t.icon
 	win.on(wmTrayCallback, func(_, lParam uintptr) {
 		if lParam == wmRButtonUp || lParam == wmLButtonUp {
 			t.showMenu()
@@ -111,7 +141,7 @@ func (t *tray) data() notifyIconData {
 		ID:              1,
 		Flags:           nifMessage | nifIcon | nifTip,
 		CallbackMessage: wmTrayCallback,
-		Icon:            t.icon,
+		Icon:            t.shown,
 	}
 	copy(d.Tip[:len(d.Tip)-1], syscall.StringToUTF16("KeyLayoutPin "+versionString()+" — keyboard layout pinned to each field"))
 	return d
@@ -127,9 +157,38 @@ func (t *tray) add() {
 func (t *tray) close() {
 	d := t.data()
 	procShellNotifyIconW.Call(nimDelete, uintptr(unsafe.Pointer(&d)))
-	if t.icon != 0 {
-		procDestroyIcon.Call(t.icon)
+	for _, i := range []uintptr{t.icon, t.green, t.yellow} {
+		if i != 0 {
+			procDestroyIcon.Call(i)
+		}
 	}
+	t.icon, t.green, t.yellow = 0, 0, 0
+}
+
+// flashDot shows the field dot for dotTime. A newer field replaces the dot
+// at once and restarts the countdown — no queue of dots.
+func (t *tray) flashDot(remembered bool) {
+	i := t.yellow
+	if remembered {
+		i = t.green
+	}
+	t.setIcon(i)
+	t.win.after(timerDot, dotTime, func() { t.setIcon(t.icon) })
+}
+
+// hideDot removes the field dot right away.
+func (t *tray) hideDot() {
+	t.win.cancel(timerDot)
+	t.setIcon(t.icon)
+}
+
+func (t *tray) setIcon(i uintptr) {
+	if i == 0 || i == t.shown {
+		return
+	}
+	t.shown = i
+	d := t.data()
+	procShellNotifyIconW.Call(nimModify, uintptr(unsafe.Pointer(&d)))
 }
 
 func appendMenu(menu uintptr, flags, id uintptr, text string) {
@@ -153,6 +212,9 @@ func (t *tray) showMenu() {
 		auto |= mfChecked
 	}
 	appendMenu(menu, auto, menuAutostart, "Start with Windows")
+	if t.openSettings != nil {
+		appendMenu(menu, mfString, menuSettings, "Settings…")
+	}
 	appendMenu(menu, mfSeparator, 0, "")
 	appendMenu(menu, mfString, menuAbout, "About")
 	appendMenu(menu, mfString, menuHelp, "Help")
@@ -172,6 +234,8 @@ func (t *tray) showMenu() {
 		if err := setAutostart(!autostartEnabled()); err != nil {
 			messageBox("Cannot change autostart: " + err.Error())
 		}
+	case menuSettings:
+		t.openSettings()
 	case menuTitle, menuAbout:
 		if askBox(aboutText() + "\n\nOpen the project page?") {
 			openURL(projectURL)
@@ -214,9 +278,10 @@ type iconInfo struct {
 	HbmColor uintptr
 }
 
-// makeIcon draws the tray icon: white "Aa" on a blue rounded square.
+// makeIcon draws the tray icon: white "Aa" on a blue rounded square, plus a
+// dot of the given ARGB color in the corner (0: no dot).
 // Drawn at runtime so the app needs no resource files.
-func makeIcon() uintptr {
+func makeIcon(dot uint32) uintptr {
 	const size, radius = 32, 7
 	const fill = 0xFF2563EB // ARGB
 
@@ -256,13 +321,15 @@ func makeIcon() uintptr {
 
 	old, _, _ := procSelectObject.Call(dc, color)
 	face, _ := syscall.UTF16PtrFromString("Segoe UI")
-	font, _, _ := procCreateFontW.Call(uintptr(^uintptr(19)), 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, uintptr(unsafe.Pointer(face))) // height -20, bold, antialiased
+	// CreateFont: height -20 px, weight 700 (FW_BOLD), charset 1 (DEFAULT_CHARSET),
+	// quality 4 (ANTIALIASED_QUALITY).
+	font, _, _ := procCreateFontW.Call(uintptr(^uintptr(19)), 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 4, 0, uintptr(unsafe.Pointer(face)))
 	oldFont, _, _ := procSelectObject.Call(dc, font)
-	procSetBkMode.Call(dc, 1)             // TRANSPARENT
+	procSetBkMode.Call(dc, 1)             // TRANSPARENT: no background behind the text
 	procSetTextColor.Call(dc, 0x00FFFFFF) // white
 	text, _ := syscall.UTF16PtrFromString("Aa")
 	r := rect{0, 0, size, size}
-	procDrawTextW.Call(dc, uintptr(unsafe.Pointer(text)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), 0x1|0x4|0x20) // center, vcenter, single line
+	procDrawTextW.Call(dc, uintptr(unsafe.Pointer(text)), ^uintptr(0), uintptr(unsafe.Pointer(&r)), 0x1|0x4|0x20) // DT_CENTER | DT_VCENTER | DT_SINGLELINE
 	procGdiFlush.Call()
 	procSelectObject.Call(dc, oldFont)
 	procDeleteObject.Call(font)
@@ -277,9 +344,46 @@ func makeIcon() uintptr {
 		}
 	}
 
+	if dot != 0 {
+		drawDot(px, size, dot)
+	}
+
 	mask, _, _ := procCreateBitmap.Call(size, size, 1, 1, 0)
 	defer procDeleteObject.Call(mask)
 	ii := iconInfo{FIcon: 1, HbmMask: mask, HbmColor: color}
 	icon, _, _ := procCreateIconIndirect.Call(uintptr(unsafe.Pointer(&ii)))
 	return icon
+}
+
+// drawDot paints an antialiased dot with a white ring into the bottom right
+// corner of a size×size ARGB (straight alpha) image.
+func drawDot(px []uint32, size int, color uint32) {
+	const r, ring = 6.5, 2.0 // radii in pixels: the dot, and the white ring around it
+	c := float64(size) - r - ring
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx, dy := float64(x)+0.5-c, float64(y)+0.5-c
+			d := math.Sqrt(dx*dx + dy*dy)
+			px[y*size+x] = blend(px[y*size+x], 0xFFFFFFFF, coverage(d, r+ring))
+			px[y*size+x] = blend(px[y*size+x], color, coverage(d, r))
+		}
+	}
+}
+
+// coverage: how much of a pixel at distance d from the center a circle of
+// radius r covers, 0..1 (a one-pixel soft edge).
+func coverage(d, r float64) float64 { return math.Max(0, math.Min(1, r+0.5-d)) }
+
+// blend draws opaque color src over dst (straight alpha) with coverage a.
+func blend(dst, src uint32, a float64) uint32 {
+	if a <= 0 {
+		return dst
+	}
+	da := float64(dst>>24) / 255
+	oa := a + da*(1-a)
+	ch := func(shift uint) uint32 {
+		s, d := float64(src>>shift&0xFF), float64(dst>>shift&0xFF)
+		return uint32((s*a+d*da*(1-a))/oa+0.5) << shift
+	}
+	return uint32(oa*255+0.5)<<24 | ch(16) | ch(8) | ch(0)
 }

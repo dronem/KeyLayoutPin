@@ -14,23 +14,28 @@ import (
 // live in a single HWND, and only the accessibility tree knows which
 // one has focus.
 
+// MSAA constants from the Windows SDK headers (oleacc.h, wtypes.h);
+// the comment gives the SDK name.
 const (
-	vtI4 = 3
+	vtI4 = 3 // VT_I4: a VARIANT holding a 32-bit integer (a child ID)
 
-	roleSystemWindow   = 0x09
-	roleSystemClient   = 0x0A
-	roleSystemDocument = 0x0F
-	roleSystemText     = 0x2A
-	roleSystemComboBox = 0x2E
+	// What an element is (ROLE_SYSTEM_*, from get_accRole).
+	roleSystemWindow   = 0x09 // ROLE_SYSTEM_WINDOW: a whole window
+	roleSystemClient   = 0x0A // ROLE_SYSTEM_CLIENT: a window's client area
+	roleSystemDocument = 0x0F // ROLE_SYSTEM_DOCUMENT: a document / web page
+	roleSystemText     = 0x2A // ROLE_SYSTEM_TEXT: a text field
+	roleSystemComboBox = 0x2E // ROLE_SYSTEM_COMBOBOX: a combo box (often editable)
 
-	stateSystemReadonly = 0x40
+	stateSystemReadonly = 0x40 // STATE_SYSTEM_READONLY: can't be edited
 
-	// IAccessible vtable method indices
-	iaRelease  = 2
-	iaName     = 10
-	iaRole     = 13
-	iaState    = 14
-	maxNameLen = 120
+	// IAccessible methods by their position in the COM vtable (0 is
+	// QueryInterface, then AddRef, Release, the IDispatch methods...).
+	iaRelease = 2  // IUnknown::Release
+	iaName    = 10 // IAccessible::get_accName
+	iaRole    = 13 // IAccessible::get_accRole
+	iaState   = 14 // IAccessible::get_accState
+
+	maxNameLen = 120 // ours: field names are cut to this many characters
 )
 
 // variant matches VARIANT in size: 16 bytes on 386, 24 on amd64/arm64.
@@ -138,9 +143,9 @@ var (
 var objidClientArg = uintptr(0xFFFFFFFC) // OBJID_CLIENT (-4) as a DWORD
 
 const (
-	vtDispatch = 9
-	iaQI       = 0
-	iaFocus    = 18
+	vtDispatch = 9  // VT_DISPATCH: a VARIANT holding an object (IDispatch)
+	iaQI       = 0  // IUnknown::QueryInterface
+	iaFocus    = 18 // IAccessible::get_accFocus
 )
 
 // readInfo reads the name, role and state of element (acc, child).
