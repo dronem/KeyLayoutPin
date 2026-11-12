@@ -9,10 +9,11 @@
 // Layout of the code:
 //   - internal/engine — when to switch and what to remember (no Windows);
 //   - internal/store  — the memory file (no Windows);
+//   - internal/atomicfile — crash-safe file writes (no Windows);
 //   - field.go        — what has focus: field key and kind (MSAA);
 //   - tracker.go      — focus events → resolver threads → engine;
 //   - window.go, tray.go, autostart.go, hotkey.go — the Windows shell parts;
-//   - main.go         — wiring.
+//   - main.go         — wiring; tracking is shared with -watch.
 package main
 
 import (
@@ -52,7 +53,7 @@ func main() {
 
 	switch {
 	case o.watch > 0:
-		runWatch(o.watch, o.chromium)
+		runWatch(o)
 	case o.probe > 0:
 		runProbe(o.probe, o.chromium)
 	case o.list:
@@ -82,22 +83,13 @@ func run(o *options) {
 		errorf("cannot read %s, using the defaults: %v", set.path, err)
 	}
 
-	// The hooks and the window are bound to this thread.
-	runtime.LockOSThread()
-	keys, err := startHotkeys()
-	if err != nil {
-		fatalf("keyboard hook: %v", err)
-	}
-	win, err := newMsgWindow()
-	if err != nil {
-		fatalf("window: %v", err)
-	}
-	defer win.close()
-	tr := newTray(win)
+	ts := startTracking()
+	defer ts.close()
+	tr := newTray(ts.win)
 	defer tr.close()
 	atExit(tr.close) // fatalf skips defers — don't leave a ghost icon
 	tr.openSettings = func() {
-		showSettings(set, tr.icon, func() {
+		showSettings(ts.win, set, tr.icon, func() {
 			if !set.FieldDot {
 				tr.hideDot()
 			}
@@ -105,7 +97,7 @@ func run(o *options) {
 	}
 
 	eng := engine.New(engine.Config{
-		System:   winSystem{keys},
+		System:   winSystem{ts.keys},
 		Memory:   storeMemory{mem},
 		Fallback: fallback,
 		Logf:     log.Printf,
@@ -117,28 +109,71 @@ func run(o *options) {
 			}
 		},
 	})
-	det := newDetector(o.chromium, false)
-	t := newTracker(engineSink{eng, o.verbose}, win, det.describe, det.foregroundChromium)
+	ts.follow(engineSink{eng, o.verbose}, o.chromium, false, o.interval)
+	if err := initAutostart(); err != nil {
+		errorf("autostart: %v", err)
+	}
+
+	printLayouts()
+	log.Printf("KeyLayoutPin %s running. Memory: %s (fields: %d). Ctrl+C to exit.", versionString(), o.db, mem.Len())
+	ts.loop()
+	log.Println("Exiting.")
+}
+
+// tracking is the main-thread setup shared by the normal mode and -watch:
+// the keyboard hook, the app window and the focus tracker. Keeping it in one
+// place makes -watch observe exactly what the engine gets.
+type tracking struct {
+	keys   *hotkeys
+	win    *msgWindow
+	unhook func()
+}
+
+// startTracking installs the keyboard hook and creates the app window. The
+// window and the focus hook are bound to the calling thread, which is locked.
+func startTracking() *tracking {
+	runtime.LockOSThread()
+	keys, err := startHotkeys()
+	if err != nil {
+		fatalf("keyboard hook: %v", err)
+	}
+	win, err := newMsgWindow()
+	if err != nil {
+		fatalf("window: %v", err)
+	}
+	return &tracking{keys: keys, win: win}
+}
+
+// follow starts feeding focus events and timer ticks (every interval) to s.
+// wake enables accessibility in Chromium windows; alwaysWalk is for -watch.
+func (ts *tracking) follow(s sink, wake, alwaysWalk bool, interval time.Duration) {
+	det := newDetector(wake, alwaysWalk)
+	t := newTracker(s, ts.win, det.describe, det.foregroundChromium)
 	unhook, err := t.hookFocus()
 	if err != nil {
 		fatalf("SetWinEventHook: %v", err)
 	}
-	defer unhook()
-	if err := win.every(1, o.interval, t.tick); err != nil {
+	ts.unhook = unhook
+	if err := ts.win.every(interval, t.tick); err != nil {
 		fatalf("SetTimer: %v", err) // without the timer layout changes go unnoticed
 	}
-	if err := initAutostart(); err != nil {
-		errorf("autostart: %v", err)
-	}
-	quitOnSignal()
-
-	printLayouts()
-	log.Printf("KeyLayoutPin %s running. Memory: %s (fields: %d). Ctrl+C to exit.", versionString(), o.db, mem.Len())
-	messageLoop()
-	log.Println("Exiting.")
 }
 
-// quitOnSignal ends the message loop on Ctrl+C or console close.
+// loop runs until tray "Exit", Ctrl+C, console close or WM_CLOSE.
+func (ts *tracking) loop() {
+	quitOnSignal()
+	ts.win.loop()
+}
+
+func (ts *tracking) close() {
+	if ts.unhook != nil {
+		ts.unhook()
+	}
+	ts.win.close()
+}
+
+// quitOnSignal ends the calling thread's message loop on Ctrl+C or console
+// close.
 func quitOnSignal() {
 	thread := getCurrentThreadID()
 	sig := make(chan os.Signal, 1)

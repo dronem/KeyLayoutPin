@@ -68,11 +68,10 @@ const (
 	wineventOutOfContext   = 0x0000 // WINEVENT_OUTOFCONTEXT: in our process, no DLL injected into others
 	wineventSkipOwnProcess = 0x0002 // WINEVENT_SKIPOWNPROCESS: not for our own windows
 
-	wmQuit                   = 0x0012    // WM_QUIT: ends the message loop
-	wmTimer                  = 0x0113    // WM_TIMER: a SetTimer timer fired
-	wmInputLangChangeRequest = 0x0050    // WM_INPUTLANGCHANGEREQUEST: asks a window to switch the layout
-	wmApp                    = 0x8000    // WM_APP: the first message number free for the app's own use
-	wmFocusChanged           = wmApp + 1 // ours: a focus event is waiting for the resolver
+	wmQuit                   = 0x0012 // WM_QUIT: ends the message loop
+	wmTimer                  = 0x0113 // WM_TIMER: a SetTimer timer fired
+	wmInputLangChangeRequest = 0x0050 // WM_INPUTLANGCHANGEREQUEST: asks a window to switch the layout
+	wmApp                    = 0x8000 // WM_APP: the app's own messages start above it (msgWindow.handle)
 
 	gaRoot                  = 2          // GA_ROOT: GetAncestor — the top-level window
 	spiGetDefaultInputLang  = 0x0059     // SPI_GETDEFAULTINPUTLANG: SystemParametersInfo — the default layout

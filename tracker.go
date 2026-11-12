@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-const wmFieldResolved = wmApp + 2
-
 // hungSkip is how long focus events of a hung app are skipped.
 const hungSkip = 30 * time.Second
 
@@ -60,10 +58,8 @@ type tracker struct {
 // newTracker wires a tracker to the message window and real resolver threads.
 func newTracker(s sink, win *msgWindow, describe func(focusEvent) focus, keepAlive func() uintptr) *tracker {
 	var stuck atomic.Int32
-	box := &inbox{notify: func() { win.post(wmFieldResolved) }}
 	t := &tracker{
 		sink: s,
-		box:  box,
 		pidOf: func(hwnd uintptr) uint32 {
 			_, pid := windowThreadProcess(hwnd)
 			return pid
@@ -71,14 +67,15 @@ func newTracker(s sink, win *msgWindow, describe func(focusEvent) focus, keepAli
 		appName:   processName,
 		stuck:     stuck.Load,
 		now:       time.Now,
-		post:      func() { win.post(wmFocusChanged) },
 		keepAlive: keepAlive,
 		hung:      map[uint32]time.Time{},
 	}
-	t.spawn = func() worker { return startResolver(describe, box, &stuck) }
+	focusChanged := win.handle(func(_, _ uintptr) { t.dispatch() })
+	fieldResolved := win.handle(func(_, _ uintptr) { t.handleResolved() })
+	t.post = func() { win.post(focusChanged) }
+	t.box = &inbox{notify: func() { win.post(fieldResolved) }}
+	t.spawn = func() worker { return startResolver(describe, t.box, &stuck) }
 	t.res = t.spawn()
-	win.on(wmFocusChanged, func(_, _ uintptr) { t.dispatch() })
-	win.on(wmFieldResolved, func(_, _ uintptr) { t.handleResolved() })
 	return t
 }
 

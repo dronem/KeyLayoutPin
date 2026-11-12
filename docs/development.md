@@ -79,14 +79,15 @@ working. The log is written in the background, so selecting text in the console 
 | [internal/engine](https://github.com/dronem/keylayoutpin/tree/main/internal/engine) | when to switch and what to remember — no Windows dependencies |
 | [internal/store](https://github.com/dronem/keylayoutpin/tree/main/internal/store) | the memory file (hashing, size cap) — no Windows dependencies |
 | [internal/kbd](https://github.com/dronem/keylayoutpin/tree/main/internal/kbd) | the keyboard layout handle type |
+| [internal/atomicfile](https://github.com/dronem/keylayoutpin/tree/main/internal/atomicfile) | crash-safe writes of the memory and settings files |
 | [field.go](https://github.com/dronem/keylayoutpin/blob/main/field.go) | what has focus: MSAA calls in `detector`, the decisions in pure `classify` |
 | [tracker.go](https://github.com/dronem/keylayoutpin/blob/main/tracker.go), [resolver.go](https://github.com/dronem/keylayoutpin/blob/main/resolver.go) | focus events → resolver threads (with the hung-app watchdog) → engine |
-| [window.go](https://github.com/dronem/keylayoutpin/blob/main/window.go), [tray.go](https://github.com/dronem/keylayoutpin/blob/main/tray.go), [about.go](https://github.com/dronem/keylayoutpin/blob/main/about.go) | the hidden message window, the tray icon and its About/Help texts |
+| [window.go](https://github.com/dronem/keylayoutpin/blob/main/window.go), [tray.go](https://github.com/dronem/keylayoutpin/blob/main/tray.go), [about.go](https://github.com/dronem/keylayoutpin/blob/main/about.go) | the hidden message window (it hands out the app's message and timer ids and runs the message loop), the tray icon and its About/Help texts |
 | [settings.go](https://github.com/dronem/keylayoutpin/blob/main/settings.go), [settingsui.go](https://github.com/dronem/keylayoutpin/blob/main/settingsui.go) | `settings.json` and the Settings window (plain Win32; common controls 6 via a runtime activation context, per-monitor DPI for that window only) |
 | [hotkey.go](https://github.com/dronem/keylayoutpin/blob/main/hotkey.go), [autostart.go](https://github.com/dronem/keylayoutpin/blob/main/autostart.go) | the keyboard hook, the Run key |
 | [flags.go](https://github.com/dronem/keylayoutpin/blob/main/flags.go), [logging.go](https://github.com/dronem/keylayoutpin/blob/main/logging.go), [paths.go](https://github.com/dronem/keylayoutpin/blob/main/paths.go) | command line, log, path expansion |
 | [probe.go](https://github.com/dronem/keylayoutpin/blob/main/probe.go) | `-probe` and `-watch` (the same tracker with an observer instead of the engine) |
-| [main.go](https://github.com/dronem/keylayoutpin/blob/main/main.go) | wiring |
+| [main.go](https://github.com/dronem/keylayoutpin/blob/main/main.go) | wiring; `tracking` is the setup shared by the normal mode and `-watch` |
 
 ## This documentation
 

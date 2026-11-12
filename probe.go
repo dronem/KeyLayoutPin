@@ -7,6 +7,8 @@ import (
 	"log"
 	"runtime"
 	"time"
+
+	"github.com/dronem/keylayoutpin/internal/engine"
 )
 
 // Diagnostic modes. Their output contains field labels and window titles.
@@ -73,38 +75,18 @@ func (w *observer) Tick() {
 	tid, pid := windowThreadProcess(fg)
 	h, app := keyboardLayout(tid), processName(pid)
 	if h != w.lastLayout || app != w.lastApp {
-		hot := time.Since(w.keys.Last()) < hotkeyWindow
+		// The engine's rule for "the user switched it".
+		hot := time.Since(w.keys.Last()) <= engine.HotkeyWindow
 		log.Printf("LAYOUT %s in %s (after hotkey: %v)", layoutName(h), app, hot)
 		w.lastLayout, w.lastApp = h, app
 	}
 }
 
-// hotkeyWindow mirrors the engine's rule for the -watch output.
-const hotkeyWindow = 1500 * time.Millisecond
-
 // runWatch is the observation mode.
-func runWatch(d time.Duration, wake bool) {
-	runtime.LockOSThread()
-	keys, err := startHotkeys()
-	if err != nil {
-		fatalf("keyboard hook: %v", err)
-	}
-	win, err := newMsgWindow()
-	if err != nil {
-		fatalf("window: %v", err)
-	}
-	defer win.close()
-	det := newDetector(wake, true)
-	t := newTracker(&observer{keys: keys}, win, det.describe, det.foregroundChromium)
-	unhook, err := t.hookFocus()
-	if err != nil {
-		fatalf("SetWinEventHook: %v", err)
-	}
-	defer unhook()
-	if err := win.every(1, 100*time.Millisecond, t.tick); err != nil {
-		fatalf("SetTimer: %v", err)
-	}
-	time.AfterFunc(d, func() { win.post(wmClose) })
-	quitOnSignal()
-	messageLoop()
+func runWatch(o *options) {
+	ts := startTracking()
+	defer ts.close()
+	ts.follow(&observer{keys: ts.keys}, o.chromium, true, o.interval)
+	time.AfterFunc(o.watch, func() { ts.win.post(wmClose) })
+	ts.loop()
 }

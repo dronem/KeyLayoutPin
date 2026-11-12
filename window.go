@@ -23,6 +23,7 @@ var (
 	procDefWindowProcW         = user32.NewProc("DefWindowProcW")
 	procPostQuitMessage        = user32.NewProc("PostQuitMessage")
 	procRegisterWindowMessageW = user32.NewProc("RegisterWindowMessageW")
+	procIsDialogMessageW       = user32.NewProc("IsDialogMessageW")
 	procMessageBoxW            = user32.NewProc("MessageBoxW")
 	procCreateMutexW           = kernel32.NewProc("CreateMutexW")
 )
@@ -58,13 +59,20 @@ type wndClassEx struct {
 type msgWindow struct {
 	hwnd     uintptr
 	handlers map[uint32]func(wParam, lParam uintptr)
-	timers   map[uintptr]func()
+	timers   map[timerID]func()
+
+	nextMsg   uint32  // last message number handed out by handle
+	nextTimer timerID // last timer id handed out by newTimer
+	dialog    uintptr // window whose Tab/Esc/Enter the loop handles; 0 — none
 }
+
+// timerID names a timer of a msgWindow; get one from newTimer.
+type timerID uintptr
 
 var windowCount atomic.Int32
 
 func newMsgWindow() (*msgWindow, error) {
-	w := &msgWindow{handlers: map[uint32]func(uintptr, uintptr){}, timers: map[uintptr]func(){}}
+	w := &msgWindow{handlers: map[uint32]func(uintptr, uintptr){}, timers: map[timerID]func(){}, nextMsg: wmApp}
 	module, _, _ := procGetModuleHandleW.Call(0)
 	// One class per window: the window procedure is a closure over w.
 	class, _ := syscall.UTF16PtrFromString("KeyLayoutPin_" + strconv.Itoa(int(windowCount.Add(1))))
@@ -86,7 +94,7 @@ func newMsgWindow() (*msgWindow, error) {
 	}
 	w.hwnd = hwnd
 	w.on(wmTimer, func(id, _ uintptr) {
-		if f := w.timers[id]; f != nil {
+		if f := w.timers[timerID(id)]; f != nil {
 			f()
 		}
 	})
@@ -106,15 +114,31 @@ func (w *msgWindow) wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 	return r
 }
 
-// on sets the handler for a message.
+// on sets the handler for a system message (WM_TIMER, a registered message).
+// The app's own messages get their numbers from handle.
 func (w *msgWindow) on(msg uint32, h func(wParam, lParam uintptr)) { w.handlers[msg] = h }
+
+// handle allocates a new app message (WM_APP+n) handled by h and returns
+// its number, so the app's messages can't collide.
+func (w *msgWindow) handle(h func(wParam, lParam uintptr)) uint32 {
+	w.nextMsg++
+	w.on(w.nextMsg, h)
+	return w.nextMsg
+}
 
 // post queues a message to the window; safe from any thread.
 func (w *msgWindow) post(msg uint32) { procPostMessageW.Call(w.hwnd, uintptr(msg), 0, 0) }
 
+// newTimer allocates a timer id for after and cancel.
+func (w *msgWindow) newTimer() timerID {
+	w.nextTimer++
+	return w.nextTimer
+}
+
 // every runs f on the window's thread every d.
-func (w *msgWindow) every(id uintptr, d time.Duration, f func()) error {
-	if r, _, err := procSetTimer.Call(w.hwnd, id, uintptr(d.Milliseconds()), 0); r == 0 {
+func (w *msgWindow) every(d time.Duration, f func()) error {
+	id := w.newTimer()
+	if r, _, err := procSetTimer.Call(w.hwnd, uintptr(id), uintptr(d.Milliseconds()), 0); r == 0 {
 		return err
 	}
 	w.timers[id] = f
@@ -123,8 +147,8 @@ func (w *msgWindow) every(id uintptr, d time.Duration, f func()) error {
 
 // after runs f once on the window's thread after d. Calling it again with
 // the same id before then restarts the countdown, so only the last f runs.
-func (w *msgWindow) after(id uintptr, d time.Duration, f func()) {
-	if r, _, err := procSetTimer.Call(w.hwnd, id, uintptr(d.Milliseconds()), 0); r == 0 {
+func (w *msgWindow) after(id timerID, d time.Duration, f func()) {
+	if r, _, err := procSetTimer.Call(w.hwnd, uintptr(id), uintptr(d.Milliseconds()), 0); r == 0 {
 		errorf("SetTimer: %v", err)
 		return
 	}
@@ -134,30 +158,34 @@ func (w *msgWindow) after(id uintptr, d time.Duration, f func()) {
 	}
 }
 
-// cancel stops a timer started by every or after.
-func (w *msgWindow) cancel(id uintptr) {
-	procKillTimer.Call(w.hwnd, id)
+// cancel stops a timer started by after.
+func (w *msgWindow) cancel(id timerID) {
+	procKillTimer.Call(w.hwnd, uintptr(id))
 	delete(w.timers, id)
 }
 
 func (w *msgWindow) close() {
 	for id := range w.timers {
-		procKillTimer.Call(w.hwnd, id)
+		procKillTimer.Call(w.hwnd, uintptr(id))
 	}
 	procDestroyWindow.Call(w.hwnd)
 }
 
-// messageLoop runs until WM_QUIT (tray "Exit", Ctrl+C, WM_CLOSE).
-func messageLoop() {
+// setDialog makes the loop handle keyboard navigation (Tab, Esc, Enter)
+// for a dialog-like window on this thread; 0 turns it off.
+func (w *msgWindow) setDialog(hwnd uintptr) { w.dialog = hwnd }
+
+// loop runs the thread's message loop until WM_QUIT (tray "Exit", Ctrl+C,
+// WM_CLOSE).
+func (w *msgWindow) loop() {
 	var m msg
 	for {
 		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
 			return
 		}
-		// Tab, Esc and Enter in the Settings window.
-		if dialog != 0 {
-			if r, _, _ := procIsDialogMessageW.Call(dialog, uintptr(unsafe.Pointer(&m))); r != 0 {
+		if w.dialog != 0 {
+			if r, _, _ := procIsDialogMessageW.Call(w.dialog, uintptr(unsafe.Pointer(&m))); r != 0 {
 				continue
 			}
 		}

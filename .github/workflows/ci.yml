@@ -37,7 +37,7 @@ jobs:
         shell: pwsh
         run: ./build.ps1
 
-  # The engine, the store and the layout type have no Windows dependencies:
+  # The engine, the store, the layout type and atomicfile have no Windows dependencies:
   # keep it that way.
   portable:
     runs-on: ubuntu-latest

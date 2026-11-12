@@ -13,7 +13,6 @@ import (
 // changes apply and are saved at once. Only one is open at a time.
 
 var (
-	procIsDialogMessageW             = user32.NewProc("IsDialogMessageW")
 	procSendMessageW                 = user32.NewProc("SendMessageW")
 	procSetWindowPos                 = user32.NewProc("SetWindowPos")
 	procShowWindow                   = user32.NewProc("ShowWindow")
@@ -88,11 +87,8 @@ const (
 	settingsExStyle = wsExControlParent
 )
 
-// dialog is the window whose keyboard navigation the message loop handles
-// (IsDialogMessage); 0 when the Settings window is closed.
-var dialog uintptr
-
 type settingsWindow struct {
+	app      *msgWindow // the app window: its loop handles our Tab, Esc, Enter
 	hwnd     uintptr
 	fieldDot uintptr // the checkbox
 	note     uintptr // grey text under it
@@ -115,13 +111,13 @@ var (
 
 // showSettings opens the Settings window, or brings it to front if open.
 // changed is called after a setting was changed and saved.
-func showSettings(s *settings, icon uintptr, changed func()) {
+func showSettings(app *msgWindow, s *settings, icon uintptr, changed func()) {
 	if w := openSettingsWindow; w != nil {
 		procShowWindow.Call(w.hwnd, swShow)
 		procSetForegroundWindow.Call(w.hwnd)
 		return
 	}
-	w := &settingsWindow{s: s, changed: changed, icon: icon}
+	w := &settingsWindow{app: app, s: s, changed: changed, icon: icon}
 	if err := w.create(); err != nil {
 		messageBox("Cannot open Settings: " + err.Error())
 	}
@@ -170,7 +166,8 @@ func (w *settingsWindow) create() error {
 		return err
 	}
 	w.hwnd = hwnd
-	openSettingsWindow, dialog = w, hwnd
+	openSettingsWindow = w
+	w.app.setDialog(hwnd)
 
 	w.fieldDot = w.child("BUTTON", "Show a dot on the tray icon when you enter a field",
 		wsTabStop|bsAutoCheckBox, idFieldDot)
@@ -302,7 +299,8 @@ func settingsWndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if w.font != 0 {
 			procDeleteObject.Call(w.font)
 		}
-		openSettingsWindow, dialog = nil, 0
+		openSettingsWindow = nil
+		w.app.setDialog(0)
 		return 0
 	}
 	r, _, _ := procDefWindowProcW.Call(hwnd, msg, wParam, lParam)

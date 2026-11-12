@@ -19,8 +19,8 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 
+	"github.com/dronem/keylayoutpin/internal/atomicfile"
 	"github.com/dronem/keylayoutpin/internal/kbd"
 )
 
@@ -135,19 +135,12 @@ func (s *Store) trim() {
 	}
 }
 
-// save writes to a temp file and renames it, so the memory is not
-// corrupted if the process is killed mid-write.
+// save writes the file atomically, so the memory is not corrupted if the
+// process is killed mid-write.
 func (s *Store) save() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(fileFormat{Salt: s.salt, Seq: s.seq, Entries: s.entries}, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return atomicfile.Write(s.path, data)
 }

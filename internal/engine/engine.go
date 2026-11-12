@@ -13,9 +13,9 @@ const (
 	// requestTTL is how long to wait for an app to apply our layout
 	// change request.
 	requestTTL = 1500 * time.Millisecond
-	// hotkeyWindow: a layout change within this time after Ctrl+Shift/Win+Space
+	// HotkeyWindow: a layout change within this time after Ctrl+Shift/Win+Space
 	// counts as the user's choice.
-	hotkeyWindow = 1500 * time.Millisecond
+	HotkeyWindow = 1500 * time.Millisecond
 	// guardWindow: how long after a focus change foreign layout changes
 	// are reverted (Windows or the app restoring the window's layout).
 	guardWindow = time.Second
@@ -195,7 +195,7 @@ func (e *Engine) Tick() {
 			e.request(e.want)
 		}
 
-	case now.Sub(e.sys.LastHotkey()) <= hotkeyWindow:
+	case now.Sub(e.sys.LastHotkey()) <= HotkeyWindow:
 		e.want = h
 		e.remember(h)
 

@@ -47,8 +47,6 @@ const (
 	// Mouse messages: the tray icon reports clicks with these.
 	wmLButtonUp = 0x0202 // WM_LBUTTONUP: left button released
 	wmRButtonUp = 0x0205 // WM_RBUTTONUP: right button released
-	// Ours: the message the tray icon sends to our window on mouse events.
-	wmTrayCallback = wmApp + 3
 
 	// Shell_NotifyIcon: what to do with the tray icon.
 	nimAdd    = 0 // NIM_ADD: add it
@@ -80,7 +78,6 @@ const (
 	menuHelp      = 5
 	menuSettings  = 6
 
-	timerDot = 2 // ours: msgWindow timer id; 1 is the layout check
 	// dotTime: how long the field dot stays on the tray icon.
 	dotTime = time.Second
 )
@@ -117,13 +114,17 @@ type tray struct {
 	yellow uintptr // with a yellow dot: the field gets the default
 	shown  uintptr // the icon in the notification area now
 
+	callback uint32  // the message the icon sends to win on mouse events
+	dotTimer timerID // hides the field dot
+
 	openSettings func() // the Settings menu item
 }
 
 func newTray(win *msgWindow) *tray {
 	t := &tray{win: win, icon: makeIcon(0), green: makeIcon(dotGreen), yellow: makeIcon(dotYellow)}
 	t.shown = t.icon
-	win.on(wmTrayCallback, func(_, lParam uintptr) {
+	t.dotTimer = win.newTimer()
+	t.callback = win.handle(func(_, lParam uintptr) {
 		if lParam == wmRButtonUp || lParam == wmLButtonUp {
 			t.showMenu()
 		}
@@ -140,7 +141,7 @@ func (t *tray) data() notifyIconData {
 		Wnd:             t.win.hwnd,
 		ID:              1,
 		Flags:           nifMessage | nifIcon | nifTip,
-		CallbackMessage: wmTrayCallback,
+		CallbackMessage: t.callback,
 		Icon:            t.shown,
 	}
 	copy(d.Tip[:len(d.Tip)-1], syscall.StringToUTF16("KeyLayoutPin "+versionString()+" — keyboard layout pinned to each field"))
@@ -173,12 +174,12 @@ func (t *tray) flashDot(remembered bool) {
 		i = t.green
 	}
 	t.setIcon(i)
-	t.win.after(timerDot, dotTime, func() { t.setIcon(t.icon) })
+	t.win.after(t.dotTimer, dotTime, func() { t.setIcon(t.icon) })
 }
 
 // hideDot removes the field dot right away.
 func (t *tray) hideDot() {
-	t.win.cancel(timerDot)
+	t.win.cancel(t.dotTimer)
 	t.setIcon(t.icon)
 }
 
