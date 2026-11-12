@@ -101,7 +101,8 @@ func run(o *options) {
 		Errf:     errorf,
 		Name:     layoutName,
 	})
-	t := newTracker(engineSink{eng, o.verbose}, win, newDetector(o.chromium, false).describe)
+	det := newDetector(o.chromium, false)
+	t := newTracker(engineSink{eng, o.verbose}, win, det.describe, det.foregroundChromium)
 	unhook, err := t.hookFocus()
 	if err != nil {
 		fatalf("SetWinEventHook: %v", err)

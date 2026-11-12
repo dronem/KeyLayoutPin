@@ -193,3 +193,21 @@ func TestPageOnly(t *testing.T) {
 		}
 	}
 }
+
+// A keep-alive ping wakes the window, isn't a focus change and leaves the
+// rewake schedule to focus events.
+func TestDescribePing(t *testing.T) {
+	d := newDetector(true, false)
+	var woken []uintptr
+	d.wake = func(h uintptr) { woken = append(woken, h) }
+	if r := d.describe(focusEvent{hwnd: 0x10, ping: true}); r.ok {
+		t.Fatal("a ping must not be reported as focus")
+	}
+	if len(woken) != 1 || woken[0] != 0x10 || len(d.woken) != 0 {
+		t.Fatalf("woken %v, entries %v: want one wake, no rewake entry", woken, d.woken)
+	}
+
+	d = newDetector(false, false) // -chromium=false
+	d.wake = func(h uintptr) { t.Fatal("must not wake with -chromium=false") }
+	d.describe(focusEvent{hwnd: 0x10, ping: true})
+}

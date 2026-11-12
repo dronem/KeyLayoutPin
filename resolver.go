@@ -20,6 +20,7 @@ const maxStuck = 8
 type focusEvent struct {
 	hwnd       uintptr
 	obj, child int32
+	ping       bool // keep-alive, not a focus change: the result is dropped
 }
 
 type resolveReq struct {

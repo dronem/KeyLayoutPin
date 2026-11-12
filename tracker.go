@@ -13,6 +13,12 @@ const wmFieldResolved = wmApp + 2
 // hungSkip is how long focus events of a hung app are skipped.
 const hungSkip = 30 * time.Second
 
+// keepAliveEvery: how often the foreground Chromium/Electron window is asked
+// about its focus when nothing else asked it. Chromium turns accessibility
+// off after ~30 s of user input without accessibility calls, and then focus
+// moves inside the window (editor → terminal → chat) send no events at all.
+const keepAliveEvery = 10 * time.Second
+
 // sink receives resolved focus events and timer ticks: the engine in normal
 // mode, the observer in -watch mode.
 type sink interface {
@@ -34,6 +40,9 @@ type tracker struct {
 	stuck   func() int32 // abandoned resolvers still running
 	now     func() time.Time
 	post    func() // asks the main thread to call dispatch
+	// keepAlive returns the foreground window that needs its accessibility
+	// kept on (a Chromium window), or 0. nil: no keep-alive.
+	keepAlive func() uintptr
 
 	ev       focusEvent // latest event, not yet handed to the resolver
 	evNew    bool
@@ -44,11 +53,12 @@ type tracker struct {
 	busy      bool
 	busySince time.Time
 	sentPID   uint32               // process of the event being resolved
+	sentAt    time.Time            // when the last request was handed over
 	hung      map[uint32]time.Time // hung processes → skipped until then
 }
 
 // newTracker wires a tracker to the message window and real resolver threads.
-func newTracker(s sink, win *msgWindow, describe func(focusEvent) focus) *tracker {
+func newTracker(s sink, win *msgWindow, describe func(focusEvent) focus, keepAlive func() uintptr) *tracker {
 	var stuck atomic.Int32
 	box := &inbox{notify: func() { win.post(wmFieldResolved) }}
 	t := &tracker{
@@ -58,11 +68,12 @@ func newTracker(s sink, win *msgWindow, describe func(focusEvent) focus) *tracke
 			_, pid := windowThreadProcess(hwnd)
 			return pid
 		},
-		appName: processName,
-		stuck:   stuck.Load,
-		now:     time.Now,
-		post:    func() { win.post(wmFocusChanged) },
-		hung:    map[uint32]time.Time{},
+		appName:   processName,
+		stuck:     stuck.Load,
+		now:       time.Now,
+		post:      func() { win.post(wmFocusChanged) },
+		keepAlive: keepAlive,
+		hung:      map[uint32]time.Time{},
 	}
 	t.spawn = func() worker { return startResolver(describe, box, &stuck) }
 	t.res = t.spawn()
@@ -105,7 +116,12 @@ func (t *tracker) dispatch() {
 		return
 	}
 	t.evNew = false
-	pid := t.pidOf(t.ev.hwnd)
+	t.submit(t.ev)
+}
+
+// submit hands an event to the idle resolver, unless its app is hung.
+func (t *tracker) submit(ev focusEvent) {
+	pid := t.pidOf(ev.hwnd)
 	if until, ok := t.hung[pid]; ok {
 		if t.now().Before(until) {
 			return // the app is hung: asking it again would hang another thread
@@ -116,8 +132,19 @@ func (t *tracker) dispatch() {
 		return // too many threads stuck in hung apps; wait for some to return
 	}
 	t.gen++
-	t.busy, t.busySince, t.sentPID = true, t.now(), pid
-	t.res.submit(resolveReq{gen: t.gen, ev: t.ev})
+	t.busy, t.busySince, t.sentAt, t.sentPID = true, t.now(), t.now(), pid
+	t.res.submit(resolveReq{gen: t.gen, ev: ev})
+}
+
+// ping keeps accessibility on in the foreground Chromium window while the
+// user works inside it without focus events reaching us.
+func (t *tracker) ping() {
+	if t.keepAlive == nil || t.busy || t.evNew || t.now().Sub(t.sentAt) < keepAliveEvery {
+		return
+	}
+	if hwnd := t.keepAlive(); hwnd != 0 {
+		t.submit(focusEvent{hwnd: hwnd, ping: true})
+	}
 }
 
 func (t *tracker) handleResolved() {
@@ -150,5 +177,6 @@ func (t *tracker) tick() {
 			delete(t.hung, pid) // also covers apps that were closed meanwhile
 		}
 	}
+	t.ping()
 	t.sink.Tick()
 }

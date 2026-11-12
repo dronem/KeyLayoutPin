@@ -107,6 +107,28 @@ func (d *detector) wakeIf(root uintptr, pid uint32, due func(w wakeEntry, known 
 	return wake
 }
 
+// keepAlive touches a Chromium window's accessibility, so Chromium doesn't
+// turn it off while the user types: it re-enables it (wake) and asks for the
+// focus, which counts as accessibility use. Runs on a resolver thread.
+// It leaves the rewake schedule alone: that one is about focus events.
+func (d *detector) keepAlive(root uintptr) {
+	d.wake(root)
+	focusedInWindow(root)
+}
+
+// foregroundChromium is the foreground window if it is a Chromium window
+// whose accessibility we keep on, else 0. For the tracker's keep-alive.
+func (d *detector) foregroundChromium() uintptr {
+	if !d.wakeEnabled {
+		return 0
+	}
+	root := rootWindow(getForegroundWindow())
+	if root == 0 || !isChromium(normalizeClass(className(root))) {
+		return 0
+	}
+	return root
+}
+
 // pageOnly: the focus is seen only as the whole page or window, not what
 // inside it has focus.
 func pageOnly(info accInfo, ok bool) bool {
@@ -117,6 +139,12 @@ func pageOnly(info accInfo, ok bool) bool {
 // resolver threads at once.
 func (d *detector) describe(ev focusEvent) focus {
 	r := focus{ev: ev}
+	if ev.ping {
+		if d.wakeEnabled {
+			d.keepAlive(ev.hwnd)
+		}
+		return r // ok=false: not a focus change
+	}
 	tid, pid := windowThreadProcess(ev.hwnd)
 	if tid == 0 {
 		return r

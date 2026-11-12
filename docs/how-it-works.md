@@ -69,7 +69,8 @@ Chrome, Edge, VS Code, Slack, Discord and other apps built on Chromium don't tel
 which field inside a page has focus — until something asks them for it. KeyLayoutPin asks
 each such window, and from then on its fields are told apart. After a while Chromium may
 turn this off again; then KeyLayoutPin sees only the whole page in focus, asks again (at most
-every 10 seconds per window) and waits briefly for the answer.
+every 10 seconds per window) and waits briefly for the answer. To keep it from turning off
+while you work inside one window, KeyLayoutPin also asks the window in front every 10 seconds.
 
 You can turn this off with [`-chromium=false`](options.md), but then all fields inside such
 an app share one layout.

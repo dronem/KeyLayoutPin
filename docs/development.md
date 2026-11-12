@@ -51,7 +51,10 @@ Tests: `go test ./...`
    window (`WM_GETOBJECT` to `Chrome_RenderWidgetHostHWND`) and finds the focused
    element via `get_accFocus`. Chromium turns accessibility off again after a while, so
    when only the whole page is seen in focus, the window is woken again (at most every
-   10 s) and the focus is looked up a few more times, 100 ms apart.
+   10 s) and the focus is looked up a few more times, 100 ms apart. It goes off
+   after ~30 s of user input with no accessibility calls; then focus moves *inside* the
+   window send no events at all. So while a Chromium window is in front and nothing asked
+   it for 10 s, the resolver pings it (wake + `get_accFocus`); the answer is dropped.
 3. On entering a field, `WM_INPUTLANGCHANGEREQUEST` with the remembered (or default) layout
    is sent to the focused window.
 4. A timer (every 100 ms) watches the foreground window's layout. Every change is one of

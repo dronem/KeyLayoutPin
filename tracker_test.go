@@ -176,3 +176,77 @@ func TestTrackerForgetsExpiredHungApps(t *testing.T) {
 		t.Fatal("expired entries must be dropped even without new events")
 	}
 }
+
+// Chromium turns accessibility off when nothing uses it for a while, and then
+// focus moves inside the window send no events. The foreground Chromium
+// window is pinged when nothing was asked of the resolver for keepAliveEvery.
+func TestTrackerKeepsChromiumAwake(t *testing.T) {
+	r := newRig()
+	fg := uintptr(0)
+	r.t.keepAlive = func() uintptr { return fg }
+
+	r.t.tick()
+	if n := len(r.worker().submitted); n != 0 {
+		t.Fatal("no Chromium window in front: nothing to ping")
+	}
+
+	fg = 7
+	r.t.tick()
+	reqs := r.worker().submitted
+	if len(reqs) != 1 || !reqs[0].ev.ping || reqs[0].ev.hwnd != 7 {
+		t.Fatalf("submitted %+v, want a ping of window 7", reqs)
+	}
+	r.t.box.put(resolved{gen: reqs[0].gen}) // a ping's result has ok=false
+	r.t.handleResolved()
+	if len(r.sink.focused) != 0 || r.t.busy {
+		t.Fatal("a ping must not reach the sink and must free the resolver")
+	}
+
+	r.now = r.now.Add(keepAliveEvery - time.Millisecond)
+	r.t.tick()
+	if n := len(r.worker().submitted); n != 1 {
+		t.Fatal("pinged again too soon")
+	}
+
+	// A real focus event asks the window anyway and postpones the ping.
+	r.t.onFocus(ev(7))
+	r.t.dispatch()
+	r.reply("field")
+	r.now = r.now.Add(keepAliveEvery - time.Millisecond)
+	r.t.tick()
+	if n := len(r.worker().submitted); n != 2 {
+		t.Fatal("a focus event must postpone the ping")
+	}
+	r.now = r.now.Add(time.Millisecond)
+	r.t.tick()
+	if reqs := r.worker().submitted; len(reqs) != 3 || !reqs[2].ev.ping {
+		t.Fatalf("submitted %+v, want a ping after keepAliveEvery", reqs)
+	}
+}
+
+// A ping never takes the place of a pending focus event, and a hung app is
+// not pinged.
+func TestTrackerPingYields(t *testing.T) {
+	r := newRig()
+	r.t.keepAlive = func() uintptr { return 7 }
+	r.pids[7] = 100
+	r.now = r.now.Add(keepAliveEvery)
+
+	r.t.onFocus(ev(7)) // not dispatched yet
+	r.t.tick()
+	if n := len(r.worker().submitted); n != 0 {
+		t.Fatal("a ping must not jump ahead of a pending focus event")
+	}
+	r.t.dispatch()
+	if reqs := r.worker().submitted; len(reqs) != 1 || reqs[0].ev.ping {
+		t.Fatalf("submitted %+v, want the focus event", reqs)
+	}
+
+	r.now = r.now.Add(resolveTimeout + time.Millisecond)
+	r.t.tick() // the app hangs: marked hung, resolver replaced
+	r.now = r.now.Add(keepAliveEvery)
+	r.t.tick()
+	if n := len(r.worker().submitted); n != 0 {
+		t.Fatal("a hung app must not be pinged")
+	}
+}

@@ -94,7 +94,8 @@ func runWatch(d time.Duration, wake bool) {
 		fatalf("window: %v", err)
 	}
 	defer win.close()
-	t := newTracker(&observer{keys: keys}, win, newDetector(wake, true).describe)
+	det := newDetector(wake, true)
+	t := newTracker(&observer{keys: keys}, win, det.describe, det.foregroundChromium)
 	unhook, err := t.hookFocus()
 	if err != nil {
 		fatalf("SetWinEventHook: %v", err)
